@@ -128,6 +128,27 @@ body {
 .seg-btn.active { background: var(--accent); color: var(--accent-text); }
 .seg-btn.devil-btn.active { background: linear-gradient(135deg, #8e0000, #e74c3c); color: #fff; box-shadow: 0 0 12px rgba(231, 76, 60, 0.75); }
 .btn-action { padding: 10px; border-radius: 10px; font-size: 0.88rem; font-weight: 800; cursor: pointer; border: none; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; }
+
+/* Polished board and distinct royal pieces. All artwork stays offline. */
+body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#151310; }
+.board-wrapper { background-image: repeating-linear-gradient(6deg,transparent 0 9px,rgba(70,34,13,.12) 10px 12px),linear-gradient(135deg,#f0d2a0,#b67d43 50%,#e5bb7b); border-color:#704724; border-radius:18px; box-shadow:0 14px 32px #0009,inset 0 1px 0 #fff8; }
+.board { position:relative; isolation:isolate; border-radius:4px; }
+.square.dark { background-image:linear-gradient(135deg,#ffffff09,#0003); }
+.square.light { background-image:linear-gradient(135deg,#fff4,#b9812220); }
+.square.selected { box-shadow:inset 0 0 0 3px #68f6cc,inset 0 0 20px #68f6cc66; }
+.piece { z-index:2; box-shadow:0 4px 5px #0009,inset 0 2px 3px #fff5!important; }
+.piece::before { width:67%!important;height:67%!important;background:none!important;border:1px solid #ffffff35;box-shadow:inset 0 1px 3px #0006; }
+.piece.king.p1-style { --royal:#7ffff0; background:radial-gradient(circle at 35% 25%,#458c9b,#103c53 58%,#071d31)!important;border:2px solid #66e8e1!important;box-shadow:0 4px 5px #0009,0 0 9px #30caca66,inset 0 1px 3px #c4ffff!important; }
+.piece.king.p2-style { --royal:#ffe4c6; background:radial-gradient(circle at 35% 25%,#d96f76,#8c243c 58%,#43152c)!important;border:2px solid #ff9393!important;box-shadow:0 4px 5px #0009,0 0 9px #f2678366,inset 0 1px 3px #ffe4da!important; }
+.piece.king::after { content:'♛';font-family:Georgia,'Times New Roman',serif;font-size:clamp(17px,5.4vw,28px);line-height:1;color:var(--royal);text-shadow:0 2px 2px #000b;filter:none; }
+.capture-overlay { position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible; }
+#capture-route { z-index:1; } #capture-badges { z-index:3; }
+.capture-route-info { margin:0;padding:9px 12px;border:1px solid #ffffff20;border-radius:10px;background:#ffffff08;font-size:.78rem;line-height:1.6; }
+.royal-key { display:flex;gap:12px;justify-content:center;font-size:.76rem;color:#ddd2c2; }
+.royal-key span { display:flex;align-items:center;gap:5px; }
+.royal-key i { font-style:normal;font-size:22px;line-height:1; }
+.seg-btn:disabled { opacity:.45;cursor:not-allowed; }
+
 </style>
 </head>
 <body>
@@ -211,6 +232,8 @@ body {
     <div class="board-wrapper" id="board-wrapper">
         <div id="board" class="board"></div>
     </div>
+    <div class="royal-key"><span><i style="color:#7ffff0">♛</i><b id="royal-p1">دامتك — أزرق</b></span><span><i style="color:#ff9393">♛</i><b id="royal-p2">دامة الخصم — أحمر</b></span></div>
+    <p id="capture-route-info" class="capture-route-info" role="status">مسار آخر أكل غادي يبان هنا بخط وأسهم وأرقام.</p>
 
     <div class="card">
         <div class="status-header">
@@ -297,6 +320,7 @@ let selectedEditorValue = 1;
 let aiTimeoutId = null;
 let nativeRequestGeneration = 0;
 let animationTimeoutId = null, animationGeneration = 0, moveHistory = [];
+let captureTrail = null;
 let lastSearchDepth = 0, nodesSearched = 0;
 
 // ==================== ZOBRIST HASHING & ENGINE TABLES ====================
@@ -426,6 +450,9 @@ function setLang(lang) {
     document.getElementById('engine-offline').textContent = lang === 'fr' ? '📴 Hors ligne — C++ sur le téléphone' : '📴 Offline — C++ على الهاتف';
     document.getElementById('engine-online').textContent = lang === 'fr' ? '🌐 En ligne — indisponible' : '🌐 Online — غير متاح';
     document.getElementById('engine-connection').textContent = lang === 'fr' ? 'Hors ligne : moteur C++20 local. En ligne : indisponible, aucun serveur relié.' : 'Offline: محرك C++20 خدام محلياً. Online: غير متاح، ما كاين حتى سيرفر مربوط.';
+    document.getElementById('royal-p1').textContent = lang === 'fr' ? 'Vos dames — bleu' : 'دامتك — أزرق';
+    document.getElementById('royal-p2').textContent = lang === 'fr' ? 'Dames adverses — rouge' : 'دامة الخصم — أحمر';
+    renderBoard();
     updateStatus();
 }
 
@@ -455,12 +482,13 @@ function rotateBoard(delta) {
 }
 
 function clearEntireBoard() {
-    moveHistory = [];
+    moveHistory = []; captureTrail = null;
     for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) board[r][c] = 0;
     renderBoard(); updateStatus();
 }
 
 function toggleEditorMode() {
+    captureTrail = null;
     nativeRequestGeneration++;
     moveHistory = [];
     cancelPendingAnimation();
@@ -511,6 +539,7 @@ function selectEditorPiece(val) {
 }
 
 function initGame() {
+    captureTrail = null;
     nativeRequestGeneration++;
     moveHistory = [];
     cancelPendingAnimation();
@@ -583,6 +612,48 @@ function renderBoard() {
             boardEl.appendChild(sq);
         }
     }
+    renderCaptureTrail(boardEl);
+}
+
+
+function renderCaptureTrail(boardEl) {
+    const info = document.getElementById('capture-route-info');
+    if (!captureTrail || captureTrail.points.length < 2 || isEditing) {
+        info.textContent = currentLang === 'fr' ? 'La dernière prise sera tracée : flèches et étapes numérotées.' : 'مسار آخر أكل غادي يبان هنا بخط وأسهم وأرقام.';
+        return;
+    }
+    const ns = 'http://www.w3.org/2000/svg';
+    const make = (tag, attrs) => {
+        const el = document.createElementNS(ns, tag);
+        for (const [name,value] of Object.entries(attrs)) el.setAttribute(name,String(value));
+        return el;
+    };
+    const size = BOARD_SIZE * 100;
+    const rtl = getComputedStyle(boardEl).direction === 'rtl';
+    const points = captureTrail.points.map(p => ({x:(rtl ? BOARD_SIZE-p.c-.5 : p.c+.5)*100,y:(p.r+.5)*100}));
+    const color = captureTrail.player === P1 ? '#7ffff0' : '#ff9393';
+    const svg = make('svg',{id:'capture-route',class:'capture-overlay',viewBox:'0 0 '+size+' '+size,'aria-hidden':'true'});
+    const defs = make('defs',{});
+    const marker = make('marker',{id:'capture-arrow',viewBox:'0 0 10 10',refX:7,refY:5,markerWidth:3,markerHeight:3,orient:'auto-start-reverse'});
+    marker.appendChild(make('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:color}));
+    defs.appendChild(marker);svg.appendChild(defs);
+    const coords=points.map(p=>p.x+','+p.y).join(' ');
+    svg.appendChild(make('polyline',{points:coords,fill:'none',stroke:'#121519','stroke-width':16,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    svg.appendChild(make('polyline',{class:'capture-path',points:coords,fill:'none',stroke:color,'stroke-width':8,'stroke-linecap':'round','stroke-linejoin':'round','marker-mid':'url(#capture-arrow)','marker-end':'url(#capture-arrow)'}));
+    boardEl.appendChild(svg);
+    const badges=make('svg',{id:'capture-badges',class:'capture-overlay',viewBox:'0 0 '+size+' '+size,role:'img','aria-label':currentLang==='fr'?'Parcours de la dernière prise':'مسار آخر أكل'});
+    points.forEach((p,i)=>{
+        badges.appendChild(make('circle',{class:'capture-waypoint',cx:p.x,cy:p.y,r:38,fill:'none',stroke:color,'stroke-width':3,'stroke-dasharray':i===0?'6 5':'none'}));
+        const bx=p.x+28,by=p.y+28;
+        const group=make('g',{transform:'rotate('+(-currentRotation)+' '+bx+' '+by+')'});
+        group.appendChild(make('circle',{cx:bx,cy:by,r:15,fill:'#111820',stroke:color,'stroke-width':3}));
+        const text=make('text',{x:bx,y:by+1,fill:color,'font-family':'system-ui,sans-serif','font-size':20,'font-weight':800,'text-anchor':'middle','dominant-baseline':'central',direction:'ltr'});
+        text.textContent=String(i);group.appendChild(text);badges.appendChild(group);
+    });
+    boardEl.appendChild(badges);
+    const who = captureTrail.player === P1 ? (currentLang==='fr'?'Joueur 1':'اللاعب 1') : (currentLang==='fr'?'Joueur 2':'اللاعب 2');
+    info.style.borderColor=color; info.style.color=color;
+    info.textContent = currentLang==='fr' ? 'Dernière prise · '+who+' · suivez 0 → '+(points.length-1)+' (le tracé reste visible jusqu’à la prochaine prise).' : 'مسار آخر أكل · '+who+' · تبع الأرقام من 0 حتى '+(points.length-1)+' — الخط كيبقى حتى الأكل الموالي.';
 }
 
 function handleSquareClick(r, c) {
@@ -614,10 +685,11 @@ function handleSquareClick(r, c) {
 }
 
 function executeMoveStepByStep(move) {
-    moveHistory.push({board: board.map(row => row.slice()), currentPlayer, moveCount, lastMove, isGameOver, lastSearchDepth});
+    moveHistory.push({board: board.map(row => row.slice()), currentPlayer, moveCount, lastMove, isGameOver, lastSearchDepth, captureTrail: captureTrail ? JSON.parse(JSON.stringify(captureTrail)) : null});
     updateUndoButton();
     const myGeneration = animationGeneration;
     isAnimating = true; selectedSquare = null;
+    if (move.captures.length) captureTrail = {player: currentPlayer, points:[{r:move.fromRow,c:move.fromCol}]};
     if (!move.steps || move.steps.length === 0) {
         board = applyMoveSilently(board, move);
         finishMove(move);
@@ -640,6 +712,7 @@ function executeMoveStepByStep(move) {
 
                 lastMove = { fromRow: curR, fromCol: curC, toRow: st.landR, toCol: st.landC };
                 curR = st.landR; curC = st.landC; stepIdx++;
+                captureTrail.points.push({r:curR,c:curC});
 
                 renderBoard();
                 animationTimeoutId = setTimeout(stepNext, 300);
@@ -652,6 +725,7 @@ function executeMoveStepByStep(move) {
 }
 
 function finishMove(move) {
+    if (move.captures.length) captureTrail = {player:currentPlayer,points:[{r:move.fromRow,c:move.fromCol},...(move.steps && move.steps.length ? move.steps.map(s=>({r:s.landR,c:s.landC})) : [{r:move.toRow,c:move.toCol}])]};
     animationTimeoutId = null;
     lastMove = move; moveCount++; isAnimating = false;
     currentPlayer = -currentPlayer;
@@ -692,6 +766,7 @@ function undoLastMove() {
     lastMove = snapshot.lastMove;
     isGameOver = snapshot.isGameOver;
     lastSearchDepth = snapshot.lastSearchDepth;
+    captureTrail = snapshot.captureTrail ? JSON.parse(JSON.stringify(snapshot.captureTrail)) : null;
     isAnimating = false;
     isAiThinking = false;
     selectedSquare = null;

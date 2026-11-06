@@ -20,7 +20,7 @@ const path = require('node:path');
   }};
   setMode('2p');
  });
- const state=()=>page.evaluate(()=>({board:board.map(r=>r.slice()),currentPlayer,moveCount,lastMove,isGameOver}));
+ const state=()=>page.evaluate(()=>({board:board.map(r=>r.slice()),currentPlayer,moveCount,lastMove,isGameOver,captureTrail}));
  const play=async()=>{
   const m=await page.evaluate(()=>legalMoves[0]);
   assert(m,'legal move exists');
@@ -36,7 +36,7 @@ const path = require('node:path');
  // Install legal fixture, then use the visible board and undo button.
  const fixture=async(pieces)=>{
   await page.evaluate(pieces=>{
-   cancelPendingAnimation(); moveHistory=[];board=Array.from({length:10},()=>Array(10).fill(0));
+   cancelPendingAnimation(); moveHistory=[];captureTrail=null;board=Array.from({length:10},()=>Array(10).fill(0));
    for(const [r,c,p] of pieces)board[r][c]=p;
    currentPlayer=1;moveCount=0;lastMove=null;isGameOver=false;isAnimating=false;isAiThinking=false;
    updateLegalMoves();renderBoard();updateStatus();
@@ -50,6 +50,36 @@ const path = require('node:path');
  const promotionBefore=await state();await play();
  assert.equal(await page.evaluate(()=>board[0].some(p=>p===2)),true);
  await page.locator('#ui-btn-undo').click();assert.deepEqual(await state(),promotionBefore);
+ // Flying king: trace every landing, preserve during a normal reply, rotate, undo.
+ await fixture([[8,1,2],[6,3,-1],[3,6,-1],[1,8,-1],[9,8,-2]]);
+ const kingBefore=await state();
+ const kingMove=await page.evaluate(()=>legalMoves[0]);
+ assert.equal(kingMove.captures.length,3);
+ const colors=await page.evaluate(()=>[
+   getComputedStyle(document.querySelector('.king.p1-style')).backgroundImage,
+   getComputedStyle(document.querySelector('.king.p2-style')).backgroundImage
+ ]);
+ assert.notEqual(colors[0],colors[1],'Kings must have distinct colors');
+ await play();
+ assert.equal(await page.locator('#capture-badges text').allTextContents().then(x=>x.join(',')),'0,1,2,3');
+ const expected=[{r:kingMove.fromRow,c:kingMove.fromCol},...kingMove.steps.map(s=>({r:s.landR,c:s.landC}))];
+ assert.deepEqual(await page.evaluate(()=>captureTrail.points),expected);
+ const coords = (rtl)=>expected.map(p=>((rtl?10-p.c-.5:p.c+.5)*100)+','+((p.r+.5)*100)).join(' ');
+ assert.equal(await page.locator('.capture-path').getAttribute('points'),coords(true));
+ await page.evaluate(()=>setLang('fr'));
+ assert.equal(await page.locator('.capture-path').getAttribute('points'),coords(false));
+ await page.evaluate(()=>rotateBoard(180));
+ assert.equal(await page.locator('#capture-badges text').count(),4);
+ await page.evaluate(()=>rotateBoard(180));
+ await page.locator('#board-wrapper').screenshot({path:'dama-capture-preview.png'});
+ const traceAfterCapture=await page.evaluate(()=>captureTrail);
+ await play(); // A normal opponent reply must not hide the last capture route.
+ assert.deepEqual(await page.evaluate(()=>captureTrail),traceAfterCapture);
+ await page.locator('#ui-btn-undo').click();
+ assert.deepEqual(await page.evaluate(()=>captureTrail),traceAfterCapture);
+ await page.locator('#ui-btn-undo').click();
+ assert.deepEqual(await state(),kingBefore);
+ assert.equal(await page.locator('#capture-route').count(),0);
  await page.evaluate(()=>{setMode('ai');document.getElementById('ai-time').value='500';});
  const aiBefore=await state(); await play();
  await page.waitForFunction(()=>moveHistory.length===2&&!isAnimating&&currentPlayer===1,{},{timeout:10000});

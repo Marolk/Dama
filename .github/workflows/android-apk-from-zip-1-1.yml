@@ -60,6 +60,12 @@ jobs:
           npm install --no-save playwright@1.58.2
           npx playwright install --with-deps chromium
           node android-ui-undo.test.cjs /tmp/dama-source/android/app/src/main/assets/index.html /tmp/dama-engine-test
+      - name: Publish capture route preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dama15-UI-preview
+          path: dama-capture-preview.png
+          if-no-files-found: error
       - name: Build APK with Android Gradle
         working-directory: /tmp/dama-source/android
         run: gradle --no-daemon :app:assembleDebug
