@@ -14,6 +14,7 @@ const path = require('node:path');
  await page.goto('file://'+path.resolve(process.argv[2]));
  await page.evaluate(()=>{
   window.DamaNative={solve:async envelope=>{
+   window.lastNativePayload=envelope;
    const i=envelope.indexOf('|');
    const answer=await window.nativeTestSolve(envelope.slice(i+1));
    window.damaNativeResult(envelope.slice(0,i)+'|'+answer);
@@ -85,6 +86,31 @@ const path = require('node:path');
  await page.waitForFunction(()=>moveHistory.length===2&&!isAnimating&&currentPlayer===1,{},{timeout:10000});
  await page.locator('#ui-btn-undo').click();assert.deepEqual(await state(),aiBefore);
  assert.equal(await page.evaluate(()=>moveHistory.length),0);
+
+ // Level 6 uses the actual C++ tactical engine: 3 pieces vs 6, bait then forced countercapture.
+ await page.evaluate(()=>{
+  setDiff(6);BOARD_SIZE=8;INITIAL_PIECES=12;initGame();
+  board=Array.from({length:8},()=>Array(8).fill(0));
+  const original={3:-1,17:1,19:-1,23:-1,24:2,26:-1,30:-1,49:-1,60:1};
+  for(const [pos,val] of Object.entries(original)){const dst=63-Number(pos);board[Math.floor(dst/8)][dst%8]=-val;}
+  currentPlayer=P2;gameMode='ai';isAiThinking=true;isGameOver=false;
+  document.getElementById('ai-time').value='500';
+  updateLegalMoves();renderBoard();updateStatus();makeAIMove();
+ });
+ await page.waitForFunction(()=>moveHistory.length===1&&!isAnimating&&currentPlayer===P1,{},{timeout:10000});
+ assert.equal(await page.locator('#diff-6').getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('#impossible-note').isVisible(),true);
+ assert.equal(await page.evaluate(()=>window.lastNativePayload.split('|')[1].trim().split(/\s+/)[3]),'6');
+ assert.equal(await page.evaluate(()=>board[6][5]===P2&&board[5][6]===0),true,'Native level 6 must play the bait 46->53');
+ const afterBait=await state();
+ assert.equal(await page.evaluate(()=>legalMoves[0].captures.length),1);
+ await page.evaluate(()=>executeMoveStepByStep(legalMoves[0]));
+ await page.waitForFunction(()=>moveHistory.length===3&&!isAnimating&&currentPlayer===P1,{},{timeout:10000});
+ assert.equal(await page.evaluate(()=>lastMove.captures.length),3);
+ assert.equal(await page.locator('#capture-badges text').count(),4);
+ await page.locator('#ui-btn-undo').click();assert.deepEqual(await state(),afterBait);
+ console.log('PASS Impossible level 6: actual native bait, forced human capture and triple countercapture; Undo restores the bait position.');
+
  assert.deepEqual(errors,[]);
  console.log('PASS: visible Undo; repeated 2-player undo; double capture; promotion; actual C++ AI reply + two-ply undo; Offline/Online labels; 3-second default.');
  } finally {await browser.close();}

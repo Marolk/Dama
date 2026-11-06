@@ -149,6 +149,10 @@ body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#
 .royal-key i { font-style:normal;font-size:22px;line-height:1; }
 .seg-btn:disabled { opacity:.45;cursor:not-allowed; }
 
+
+.seg-btn.impossible-btn {grid-column:1 / -1;padding:12px;font-size:.92rem;border:1px solid #a17aff66;background:#30203f;color:#eadfff;}
+.seg-btn.impossible-btn.active {background:linear-gradient(120deg,#511a69,#ba224e);border-color:#eaa8ff;color:#fff;box-shadow:0 2px 14px #a82e6b55;}
+.impossible-note {font-size:.78rem;line-height:1.7;color:#d8badf;margin:0;padding:9px;border-inline-start:3px solid #b478db;}
 </style>
 </head>
 <body>
@@ -285,8 +289,10 @@ body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#
             <button class="seg-btn" id="diff-3" onclick="setDiff(3)">صعيب</button>
             <button class="seg-btn" id="diff-4" onclick="setDiff(4)">💀 ديمون</button>
             <button class="seg-btn devil-btn active" id="diff-5" onclick="setDiff(5)">🔥 إعجازي</button>
+            <button class="seg-btn impossible-btn" id="diff-6" aria-pressed="false" onclick="setDiff(6)">☠️ المستحيل — فخاخ وتضحيات</button>
         </div>
 
+        <p id="impossible-note" class="impossible-note" hidden>كيقلب على التضحيات والفخاخ والضدّات. هادي توقعات البحث، ماشي ضمان الربح. وقت التفكير كيبقى حسب الاختيار ديالك.</p>
         <!-- خيار تحديد من يبدأ الطرح -->
         <div class="section-label" id="ui-starter-label">شكون يبدا الطرح اللول:</div>
         <div class="segmented-control">
@@ -452,6 +458,7 @@ function setLang(lang) {
     document.getElementById('engine-connection').textContent = lang === 'fr' ? 'Hors ligne : moteur C++20 local. En ligne : indisponible, aucun serveur relié.' : 'Offline: محرك C++20 خدام محلياً. Online: غير متاح، ما كاين حتى سيرفر مربوط.';
     document.getElementById('royal-p1').textContent = lang === 'fr' ? 'Vos dames — bleu' : 'دامتك — أزرق';
     document.getElementById('royal-p2').textContent = lang === 'fr' ? 'Dames adverses — rouge' : 'دامة الخصم — أحمر';
+    updateDifficultyHint();
     renderBoard();
     updateStatus();
 }
@@ -465,9 +472,19 @@ function setMode(mode) {
 
 function setDiff(d) {
     difficultyLevel = d;
-    [1, 2, 3, 4, 5].forEach(v => document.getElementById('diff-' + v).classList.toggle('active', v === d));
+    [1, 2, 3, 4, 5, 6].forEach(v => {
+        const btn=document.getElementById('diff-' + v);
+        btn.classList.toggle('active',v===d);btn.setAttribute('aria-pressed',String(v===d));
+    });
+    updateDifficultyHint();
 }
 
+function updateDifficultyHint() {
+    document.getElementById('diff-6').textContent = currentLang==='fr' ? '☠️ Impossible — pièges et sacrifices' : '☠️ المستحيل — فخاخ وتضحيات';
+    const note=document.getElementById('impossible-note');
+    note.hidden = difficultyLevel!==6;
+    note.textContent=currentLang==='fr' ? 'Recherche de sacrifices, pièges et contre-attaques. Ce sont des estimations de recherche, sans victoire garantie. Le temps choisi reste appliqué.' : 'كيقلب على التضحيات والفخاخ والضدّات. هادي توقعات البحث، ماشي ضمان الربح. وقت التفكير كيبقى حسب الاختيار ديالك.';
+}
 function toggleColorPanel() {
     isColorOpen = !isColorOpen;
     document.getElementById('color-panel').classList.toggle('active', isColorOpen);
@@ -1010,6 +1027,7 @@ window.damaNativeResult=function(envelope){
   const caps=parts.slice(i,i+num);i+=num;
   const pathLen=parts[i++];const path=parts.slice(i,i+pathLen);i+=pathLen;
   lastSearchDepth=parts[i++]||0;
+  if(parts.length < i+4) throw new Error('Native engine protocol outdated: install the updated APK');
   const candidate=legalMoves.find(m=>m.fromRow*BOARD_SIZE+m.fromCol===from && m.toRow*BOARD_SIZE+m.toCol===to && m.captures.length===caps.length && m.captures.every((c,j)=>c.r*BOARD_SIZE+c.c===caps[j]));
   if (!candidate) throw new Error('Native move not in legal moves');
   isAiThinking=false;executeMoveStepByStep(candidate);

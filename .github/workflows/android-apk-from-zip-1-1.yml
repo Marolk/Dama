@@ -8,6 +8,7 @@ on:
       - '.github/workflows/android-apk-from-zip-1-1.yml'
       - 'android-undo-ui-index.html'
       - 'android-ui-undo.test.cjs'
+      - 'android-native/**'
 
 permissions:
   contents: read
@@ -25,6 +26,7 @@ jobs:
           test -f /tmp/dama-source/android/app/src/main/cpp/engine.cpp
           test -f /tmp/dama-source/android/settings.gradle.kts
           cp android-undo-ui-index.html /tmp/dama-source/android/app/src/main/assets/index.html
+          cp android-native/engine.cpp /tmp/dama-source/android/app/src/main/cpp/engine.cpp
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -52,6 +54,8 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -pthread /tmp/dama-source/android/app/src/main/cpp/engine.cpp -o /tmp/dama-engine-test
           python3 /tmp/dama-source/android/tests/smoke.py /tmp/dama-engine-test
+          g++ -std=c++20 -O2 -pthread android-native/trap-tests.cpp -o /tmp/dama-trap-tests
+          /tmp/dama-trap-tests
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
