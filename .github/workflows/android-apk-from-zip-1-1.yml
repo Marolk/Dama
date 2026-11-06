@@ -5,7 +5,9 @@ on:
   push:
     paths:
       - 'Dama15_Android_CPP_Fixed_v2.zip'
-      - '.github/workflows/android-apk-from-zip-1.yml'
+      - '.github/workflows/android-apk-from-zip-1-1.yml'
+      - 'android-undo-ui-index.html'
+      - 'android-ui-undo.test.cjs'
 
 permissions:
   contents: read
@@ -22,6 +24,7 @@ jobs:
           unzip -q Dama15_Android_CPP_Fixed_v2.zip -d /tmp/dama-source
           test -f /tmp/dama-source/android/app/src/main/cpp/engine.cpp
           test -f /tmp/dama-source/android/settings.gradle.kts
+          cp android-undo-ui-index.html /tmp/dama-source/android/app/src/main/assets/index.html
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -49,13 +52,33 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -pthread /tmp/dama-source/android/app/src/main/cpp/engine.cpp -o /tmp/dama-engine-test
           python3 /tmp/dama-source/android/tests/smoke.py /tmp/dama-engine-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Undo UI and actual C++ protocol in Chromium
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps chromium
+          node android-ui-undo.test.cjs /tmp/dama-source/android/app/src/main/assets/index.html /tmp/dama-engine-test
       - name: Build APK with Android Gradle
         working-directory: /tmp/dama-source/android
         run: gradle --no-daemon :app:assembleDebug
       - name: Validate APK output
-        run: test -s /tmp/dama-source/android/app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          cp /tmp/dama-source/android/app/build/outputs/apk/debug/app-debug.apk Dama15-Ultimate.apk
+          test -s Dama15-Ultimate.apk
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('Dama15-Ultimate.apk') as z:
+              for abi in ('arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'):
+                  assert 'lib/'+abi+'/libdama_engine.so' in z.namelist(), abi
+              html=z.read('assets/index.html').decode()
+              assert 'engine-online' in html and 'undoLastMove' in html
+              assert html == open('android-undo-ui-index.html').read()
+          print('PASS APK native libraries and exact tested UI')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: Dama15-Ultimate-APK
-          path: /tmp/dama-source/android/app/build/outputs/apk/debug/app-debug.apk
+          path: Dama15-Ultimate.apk
           if-no-files-found: error
