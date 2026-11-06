@@ -1,33 +1,78 @@
 name: Build Dama C++ WebAssembly
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
+  pull_request:
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: dama-pages-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Import reviewed source bundle when present
+        run: |
+          if [ -f dama-wasm-source.zip ]; then
+            unzip -o dama-wasm-source.zip
+          fi
       - uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
-      - name: Find C++ sources
-        run: find . -type f \( -name '*.cpp' -o -name '*.hpp' \)
-      - name: Check WebAssembly build script
-        run: |
-          if [ -f build-web.sh ]; then
-            bash build-web.sh
-          else
-            echo 'Missing build-web.sh: C++ WebAssembly build not configured'
-            exit 1
-          fi
-      - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+          version: '4.0.23'
+      - uses: actions/setup-node@v4
         with:
-          name: dama15-web
-          path: dist/
+          node-version: '22'
+      - name: Native tests
+        run: |
+          mkdir -p build
+          g++ -std=c++20 -O2 tests/engine_test.cpp -o build/engine_test
+          ./build/engine_test
+          g++ -std=c++20 -O2 -DDAMA_CLI src/engine.cpp -o build/engine-cli
+      - name: Build and test WebAssembly
+        run: |
+          bash build-web.sh
+          node tests/protocol.cjs
+      - name: Browser tests
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium firefox webkit
+          node tests/browser.cjs
+      - name: Persist validated sources and browser assets
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git ls-remote --exit-code --heads origin backup/pre-wasm-20261106 >/dev/null; then
+            git push origin 3e7e4f4e20e94160b6865e731d0f5cdd9ac793df:refs/heads/backup/pre-wasm-20261106
+          fi
+          cp dist/engine.js dist/engine.wasm .
+          git add src tests docs index.html dama-worker.js build-web.sh .gitignore engine.js engine.wasm
+          if [ -f dama-wasm-source.zip ]; then git rm dama-wasm-source.zip; fi
+          if ! git diff --cached --quiet; then
+            git commit -m "Persist validated C++20 WASM engine, UI and regression tests"
+            git push origin HEAD:main
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy validated site
+        id: deployment
+        uses: actions/deploy-pages@v4
