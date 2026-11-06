@@ -81,6 +81,36 @@ const path = require('node:path');
  await page.locator('#ui-btn-undo').click();
  assert.deepEqual(await state(),kingBefore);
  assert.equal(await page.locator('#capture-route').count(),0);
+
+ // The trail disappears three seconds after completion, independently of later moves.
+ await fixture([[6,1,1],[5,2,-1],[3,4,-1],[0,9,-2]]);
+ await play();
+ const afterTimedCapture=await state();
+ await play(); // Normal reply must not restart the countdown.
+ await page.waitForTimeout(2200);
+ assert.equal(await page.locator('#capture-route').count(),1,'Trail should still be visible before expiry');
+ await page.evaluate(()=>rotateBoard(180)); // A redraw must not restart the countdown.
+ await page.waitForTimeout(1000);
+ assert.equal(await page.locator('#capture-route').count(),0,'Trail must disappear without another capture');
+ assert.equal(await page.locator('#capture-badges').count(),0);
+ await page.locator('#ui-btn-undo').click();
+ const restored=await state();
+ assert.deepEqual(restored.board,afterTimedCapture.board);
+ assert.equal(restored.currentPlayer,afterTimedCapture.currentPlayer);
+ assert.equal(restored.captureTrail,null,'Undo must not resurrect an expired trail');
+ await page.evaluate(()=>rotateBoard(180));
+ // A later capture gets its own three seconds; the old timer cannot erase it.
+ await fixture([[6,1,1],[5,2,-1],[3,4,-1],[0,7,-2]]);
+ await play();
+ await page.waitForTimeout(1800);
+ await play();
+ assert.equal(await page.evaluate(()=>captureTrail.player),-1);
+ await page.waitForTimeout(1300);
+ assert.equal(await page.locator('#capture-route').count(),1,'Old countdown must not erase the new capture');
+ await page.waitForTimeout(1900);
+ assert.equal(await page.locator('#capture-route').count(),0,'New capture must expire on its own countdown');
+ console.log('PASS 3-second capture trail expiry; no reset on quiet moves/rotation; expired Undo; fresh timer on a new capture.');
+
  await page.evaluate(()=>{setMode('ai');document.getElementById('ai-time').value='500';});
  const aiBefore=await state(); await play();
  await page.waitForFunction(()=>moveHistory.length===2&&!isAnimating&&currentPlayer===1,{},{timeout:10000});

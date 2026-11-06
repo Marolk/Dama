@@ -327,6 +327,8 @@ let aiTimeoutId = null;
 let nativeRequestGeneration = 0;
 let animationTimeoutId = null, animationGeneration = 0, moveHistory = [];
 let captureTrail = null;
+let captureTrailTimer = null;
+const CAPTURE_TRAIL_MS = 3000;
 let lastSearchDepth = 0, nodesSearched = 0;
 
 // ==================== ZOBRIST HASHING & ENGINE TABLES ====================
@@ -633,9 +635,31 @@ function renderBoard() {
 }
 
 
+function cancelCaptureTrailExpiry() {
+    if (captureTrailTimer !== null) clearTimeout(captureTrailTimer);
+    captureTrailTimer = null;
+}
+function scheduleCaptureTrailExpiry() {
+    cancelCaptureTrailExpiry();
+    if (!captureTrail || !captureTrail.expiresAt) return;
+    const remaining = captureTrail.expiresAt - Date.now();
+    if (remaining <= 0) { captureTrail = null; return; }
+    const trail = captureTrail;
+    captureTrailTimer = setTimeout(() => {
+        captureTrailTimer = null;
+        if (captureTrail === trail) { captureTrail = null; renderBoard(); }
+    }, remaining);
+}
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { scheduleCaptureTrailExpiry(); renderBoard(); }
+});
 function renderCaptureTrail(boardEl) {
+    if (captureTrail && captureTrail.expiresAt && captureTrail.expiresAt <= Date.now()) {
+        cancelCaptureTrailExpiry(); captureTrail = null;
+    }
     const info = document.getElementById('capture-route-info');
     if (!captureTrail || captureTrail.points.length < 2 || isEditing) {
+        info.style.borderColor=''; info.style.color='';
         info.textContent = currentLang === 'fr' ? 'La dernière prise sera tracée : flèches et étapes numérotées.' : 'مسار آخر أكل غادي يبان هنا بخط وأسهم وأرقام.';
         return;
     }
@@ -670,7 +694,7 @@ function renderCaptureTrail(boardEl) {
     boardEl.appendChild(badges);
     const who = captureTrail.player === P1 ? (currentLang==='fr'?'Joueur 1':'اللاعب 1') : (currentLang==='fr'?'Joueur 2':'اللاعب 2');
     info.style.borderColor=color; info.style.color=color;
-    info.textContent = currentLang==='fr' ? 'Dernière prise · '+who+' · suivez 0 → '+(points.length-1)+' (le tracé reste visible jusqu’à la prochaine prise).' : 'مسار آخر أكل · '+who+' · تبع الأرقام من 0 حتى '+(points.length-1)+' — الخط كيبقى حتى الأكل الموالي.';
+    info.textContent = currentLang==='fr' ? 'Dernière prise · '+who+' · suivez 0 → '+(points.length-1)+' (le tracé disparaît après 3 secondes).' : 'مسار آخر أكل · '+who+' · تبع الأرقام من 0 حتى '+(points.length-1)+' — الخط كيختافي بوحدو من بعد 3 ثواني.';
 }
 
 function handleSquareClick(r, c) {
@@ -706,7 +730,10 @@ function executeMoveStepByStep(move) {
     updateUndoButton();
     const myGeneration = animationGeneration;
     isAnimating = true; selectedSquare = null;
-    if (move.captures.length) captureTrail = {player: currentPlayer, points:[{r:move.fromRow,c:move.fromCol}]};
+    if (move.captures.length) {
+        cancelCaptureTrailExpiry();
+        captureTrail = {player: currentPlayer, points:[{r:move.fromRow,c:move.fromCol}]};
+    }
     if (!move.steps || move.steps.length === 0) {
         board = applyMoveSilently(board, move);
         finishMove(move);
@@ -742,7 +769,8 @@ function executeMoveStepByStep(move) {
 }
 
 function finishMove(move) {
-    if (move.captures.length) captureTrail = {player:currentPlayer,points:[{r:move.fromRow,c:move.fromCol},...(move.steps && move.steps.length ? move.steps.map(s=>({r:s.landR,c:s.landC})) : [{r:move.toRow,c:move.toCol}])]};
+    if (move.captures.length) captureTrail = {player:currentPlayer,points:[{r:move.fromRow,c:move.fromCol},...(move.steps && move.steps.length ? move.steps.map(s=>({r:s.landR,c:s.landC})) : [{r:move.toRow,c:move.toCol}])],expiresAt:Date.now()+CAPTURE_TRAIL_MS};
+    if (move.captures.length) scheduleCaptureTrailExpiry();
     animationTimeoutId = null;
     lastMove = move; moveCount++; isAnimating = false;
     currentPlayer = -currentPlayer;
@@ -756,6 +784,7 @@ function finishMove(move) {
 }
 
 function cancelPendingAnimation() {
+    cancelCaptureTrailExpiry();
     animationGeneration++;
     if (animationTimeoutId !== null) clearTimeout(animationTimeoutId);
     animationTimeoutId = null;
@@ -784,6 +813,7 @@ function undoLastMove() {
     isGameOver = snapshot.isGameOver;
     lastSearchDepth = snapshot.lastSearchDepth;
     captureTrail = snapshot.captureTrail ? JSON.parse(JSON.stringify(snapshot.captureTrail)) : null;
+    scheduleCaptureTrailExpiry();
     isAnimating = false;
     isAiThinking = false;
     selectedSquare = null;
