@@ -1,0 +1,50 @@
+name: Build Dama 15 Android APK from ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Dama15_Android_CPP_Fixed_v2.zip'
+      - '.github/workflows/android-apk-from-zip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract Android C++ source archive
+        run: |
+          test -s Dama15_Android_CPP_Fixed_v2.zip
+          mkdir -p /tmp/dama-source
+          unzip -q Dama15_Android_CPP_Fixed_v2.zip -d /tmp/dama-source
+          test -f /tmp/dama-source/android/app/src/main/cpp/engine.cpp
+          test -f /tmp/dama-source/android/settings.gradle.kts
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'cmake;3.22.1' 'ndk;27.2.12479018'
+      - name: Compile native C++20 and run smoke tests
+        run: |
+          g++ -std=c++20 -O2 -pthread /tmp/dama-source/android/app/src/main/cpp/engine.cpp -o /tmp/dama-engine-test
+          python3 /tmp/dama-source/android/tests/smoke.py /tmp/dama-engine-test
+      - name: Build APK with Android Gradle
+        working-directory: /tmp/dama-source/android
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Validate APK output
+        run: test -s /tmp/dama-source/android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dama15-Ultimate-APK
+          path: /tmp/dama-source/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
