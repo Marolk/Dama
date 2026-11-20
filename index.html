@@ -266,6 +266,7 @@ body {
     </div>
 </div>
 
+<div id="engine-analysis" role="status" style="text-align:center;padding:12px;overflow-wrap:anywhere">C++20 / WebAssembly</div>
 <script>
 let BOARD_SIZE = 10;
 let INITIAL_PIECES = 15;
@@ -283,22 +284,54 @@ let selectedEditorValue = 1;
 let aiTimeoutId = null;
 let lastSearchDepth = 0, nodesSearched = 0;
 
-// ==================== ZOBRIST HASHING & ENGINE TABLES ====================
-const zobristTable = Array(10).fill(null).map(() => Array(10).fill(null).map(() => [0,0,0,0,0].map(() => (Math.random() * 0xFFFFFFFF) >>> 0)));
-const zobristTurn = (Math.random() * 0xFFFFFFFF) >>> 0;
-let transpositionTable = new Map();
-let killerMoves = Array(32).fill(null).map(() => [null, null]);
-let historyTable = Array(100).fill(null).map(() => Array(100).fill(0));
-let searchEndTime = 0, searchAborted = false;
+let engineWorker = null, requestId = 0, generation = 0, pending = new Map();
+let positionHistory = [], engineFailure = '', loadingMoves = false, repetitionDraw = false;
+function resetEngineSession() {
+    generation++;
+    if (engineWorker) engineWorker.terminate();
+    engineWorker = null;
+    for (const job of pending.values()) { clearTimeout(job.timer); job.reject(new Error('Cancelled')); }
+    pending.clear(); positionHistory = []; engineFailure = ''; repetitionDraw = false;
+}
+function engineCall(op) {
+    if (!engineWorker) {
+        engineWorker = new Worker('dama-worker.js');
+        engineWorker.onmessage = ({data}) => {
+            const job = pending.get(data.id); if (!job) return;
+            clearTimeout(job.timer); pending.delete(data.id);
+            data.error ? job.reject(Error(data.error)) : job.resolve(data.result);
+        };
+        engineWorker.onerror = event => {
+            for (const job of pending.values()) {clearTimeout(job.timer);job.reject(Error(event.message || 'WASM Worker failed'));}
+            pending.clear(); engineWorker.terminate(); engineWorker = null;
+        };
+    }
+    return new Promise((resolve,reject) => {
+        const id = ++requestId;
+        const timer = setTimeout(() => {
+            if(engineWorker) engineWorker.terminate(); engineWorker=null;
+            for(const job of pending.values()){clearTimeout(job.timer);job.reject(Error('WASM response timeout'));}
+            pending.clear();
+        }, op ? 4500 : 15000);
+        pending.set(id,{resolve,reject,timer});
+        engineWorker.postMessage({id,op,board,player:currentPlayer,difficulty:difficultyLevel,history:positionHistory.slice(0,-1)});
+    });
+}
+function showEngineError(error) {
+    engineFailure = 'خطأ C++ / WASM: ' + error.message;
+    isAiThinking = false; loadingMoves = false; legalMoves = [];
+    document.getElementById('ui-turn-val').textContent = engineFailure;
+    console.error(error);
+}
 
 const i18n = {
     ar: {
         dir: 'rtl', title: 'الدامة المحترفة - Grandmaster', subtitle: 'قانون أكل أكبر عدد إجباري • محرك Zobrist PVS',
-        turn: 'النوبة:', thinking: '🔥 كيحسب بعمق إعجازي...', moves: 'الحركات', depthLbl: 'العمق',
+        turn: 'النوبة:', thinking: '🔥 كيحسب بمحرك C++...', moves: 'الحركات', depthLbl: 'العمق',
         p1Ai: 'أنت', p2Ai: 'Grandmaster AI', p1Local: 'لاعب 1', p2Local: 'لاعب 2',
         rem: 'باقين', cap: 'كلاو', editOn: '💾 إنهاء', editOff: '✏️ تعديل',
         starterLbl: 'شكون يبدا الطرح اللول:', startP1: '👤 أنا نبدا', startP2: '🤖 الكمبيوتر يبدا',
-        winP1: 'مستحيل! تغلبتي على المحرك الإعجازي!', winP2: '🔥 المحرك الإعجازي حسم الطرح!'
+        winP1: 'ربحتي الطرح!', winP2: '🔥 الكمبيوتر ربح الطرح!'
     },
     fr: {
         dir: 'ltr', title: 'Dames Grandmaster AI', subtitle: 'Prise maximale obligatoire • Moteur PVS',
@@ -448,6 +481,7 @@ function clearEntireBoard() {
 }
 
 function toggleEditorMode() {
+    resetEngineSession(); legalMoves = []; loadingMoves = false;
     if (aiTimeoutId) { clearTimeout(aiTimeoutId); aiTimeoutId = null; }
     isAiThinking = false; isAnimating = false;
     if (!isEditing) {
@@ -464,7 +498,9 @@ function toggleEditorMode() {
     saveUserGame();
 }
 
-function finalizeEdit(chosenPlayer) {
+async function finalizeEdit(chosenPlayer) {
+    resetEngineSession();
+    const token = generation;
     isEditing = false;
     document.getElementById('turn-modal').classList.remove('active');
     const btn = document.getElementById('ui-btn-edit');
@@ -475,9 +511,9 @@ function finalizeEdit(chosenPlayer) {
     currentPlayer = chosenPlayer;
     isGameOver = false; isAiThinking = false; isAnimating = false;
     selectedSquare = null;
-    transpositionTable.clear();
 
-    updateLegalMoves(); renderBoard(); updateStatus();
+
+    await updateLegalMoves(); if (token !== generation) return; renderBoard(); updateStatus();
 
     if (!isGameOver && gameMode === 'ai' && currentPlayer === P2) {
         isAiThinking = true;
@@ -496,7 +532,9 @@ function selectEditorPiece(val) {
     saveUserGame();
 }
 
-function initGame() {
+async function initGame() {
+    resetEngineSession();
+    const token = generation;
     if (aiTimeoutId) { clearTimeout(aiTimeoutId); aiTimeoutId = null; }
     const boardEl = document.getElementById('board');
     boardEl.style.gridTemplateColumns = `repeat(${BOARD_SIZE}, 1fr)`;
@@ -520,8 +558,8 @@ function initGame() {
     document.getElementById('turn-modal').classList.remove('active');
     document.getElementById('ui-btn-edit').textContent = i18n[currentLang].editOff;
     document.getElementById('ui-btn-edit').style.background = '#8e44ad';
-    transpositionTable.clear();
-    updateLegalMoves(); renderBoard(); updateStatus();
+
+    await updateLegalMoves(); if (token !== generation) return; renderBoard(); updateStatus();
 
     // إذا كان الاختيار أن يبدأ الكمبيوتر الطرح، يلعب فوراً
     if (!isGameOver && gameMode === 'ai' && currentPlayer === P2) {
@@ -580,7 +618,7 @@ function handleSquareClick(r, c) {
         return;
     }
 
-    if (isGameOver || isAnimating || isAiThinking || (gameMode === 'ai' && currentPlayer === P2)) return;
+    if (loadingMoves || engineFailure || isGameOver || isAnimating || isAiThinking || (gameMode === 'ai' && currentPlayer === P2)) return;
     if (selectedSquare) {
         const matchingMoves = legalMoves.filter(m => m.fromRow === selectedSquare.r && m.fromCol === selectedSquare.c && m.toRow === r && m.toCol === c);
         if (matchingMoves.length > 0) {
@@ -597,6 +635,8 @@ function handleSquareClick(r, c) {
 }
 
 function executeMoveStepByStep(move) {
+    const animationToken = generation;
+    const finalBoard = applyMoveSilently(board, move);
     isAnimating = true; selectedSquare = null;
     if (!move.steps || move.steps.length === 0) {
         board = applyMoveSilently(board, move);
@@ -608,12 +648,12 @@ function executeMoveStepByStep(move) {
         let stepIdx = 0;
 
         function stepNext() {
+            if (animationToken !== generation) return;
             if (stepIdx < move.steps.length) {
                 const st = move.steps[stepIdx];
                 tempBoard[curR][curC] = 0;
-                tempBoard[st.capR][st.capC] = 0;
-                if (piece === P1 && st.landR === 0) piece = 2;
-                if (piece === P2 && st.landR === BOARD_SIZE - 1) piece = -2;
+                // Captured pieces remain blockers until the whole turn ends.
+
                 tempBoard[st.landR][st.landC] = piece;
                 board = tempBoard.map(row => [...row]);
 
@@ -623,6 +663,7 @@ function executeMoveStepByStep(move) {
                 renderBoard();
                 setTimeout(stepNext, 300);
             } else {
+                board = finalBoard;
                 finishMove(move);
             }
         }
@@ -630,10 +671,11 @@ function executeMoveStepByStep(move) {
     }
 }
 
-function finishMove(move) {
+async function finishMove(move) {
+    const token = generation;
     lastMove = move; moveCount++; isAnimating = false;
     currentPlayer = -currentPlayer;
-    updateLegalMoves(); renderBoard(); updateStatus();
+    await updateLegalMoves(); if (token !== generation) return; renderBoard(); updateStatus();
 
     if (!isGameOver && gameMode === 'ai' && currentPlayer === P2) {
         isAiThinking = true;
@@ -654,9 +696,16 @@ function applyMoveSilently(b, move) {
     return nb;
 }
 
-function updateLegalMoves() {
-    legalMoves = getAllLegalMoves(board, currentPlayer, false);
-    if (legalMoves.length === 0) isGameOver = true;
+async function updateLegalMoves() {
+    const token = generation; loadingMoves = true; legalMoves = [];
+    try {
+        const result = await engineCall(0);
+        if (token !== generation) return;
+        legalMoves = result.moves; positionHistory.push(result.hash);
+        repetitionDraw = positionHistory.filter(h => h === result.hash).length >= 3;
+        isGameOver = repetitionDraw || legalMoves.length === 0;
+        loadingMoves = false;
+    } catch (error) { if(token === generation) showEngineError(error); }
 }
 
 function updateStatus() {
@@ -681,416 +730,34 @@ function updateStatus() {
     document.getElementById('ui-moves').textContent = `${t.moves}: ${moveCount} | ${t.depthLbl}: ${depthStr}`;
     document.getElementById('row-p1').classList.toggle('active-turn', currentPlayer === P1 && !isGameOver);
     document.getElementById('row-p2').classList.toggle('active-turn', currentPlayer === P2 && !isGameOver);
+    if (engineFailure) { document.getElementById('ui-turn-val').textContent = engineFailure; return; }
+    if (repetitionDraw) { document.getElementById('ui-turn-val').textContent = currentLang === 'fr' ? 'Nulle : triple répétition' : 'تعادل: تكرار الوضعية ثلاث مرات'; return; }
     if (!isAnimating && !isAiThinking) {
         document.getElementById('ui-turn-val').textContent = isGameOver ? (currentPlayer === P1 ? t.winP2 : t.winP1) : (currentPlayer === P1 ? p1Name : p2Name);
     }
 }
 
-// قانون إجبارية أكل أكبر عدد (Maximum Capture Rule)
-function getAllLegalMoves(b, player, isSearch = false) {
-    let captureMoves = [], normalMoves = [];
-    for (let r = 0; r < BOARD_SIZE; r++) {
-        for (let c = 0; c < BOARD_SIZE; c++) {
-            const p = b[r][c];
-            if (p === 0 || (p > 0 ? 1 : -1) !== player) continue;
-            const caps = getCapturesForPiece(b, r, c, p, [], [], isSearch);
-            if (caps.length > 0) captureMoves.push(...caps);
-            else if (captureMoves.length === 0) normalMoves.push(...getNormalMovesForPiece(b, r, c, p));
-        }
-    }
-    if (captureMoves.length > 0) {
-        let maxCapCount = 0;
-        for (let i = 0; i < captureMoves.length; i++) {
-            if (captureMoves[i].captures.length > maxCapCount) {
-                maxCapCount = captureMoves[i].captures.length;
-            }
-        }
-        return captureMoves.filter(m => m.captures.length === maxCapCount);
-    }
-    return normalMoves;
-}
-
-function getNormalMovesForPiece(b, r, c, piece) {
-    const moves = [], isKing = Math.abs(piece) === 2, forwardDir = piece > 0 ? -1 : 1;
-    if (!isKing) {
-        const nr = r + forwardDir;
-        if (nr >= 0 && nr < BOARD_SIZE) {
-            if (c > 0 && b[nr][c - 1] === 0) moves.push({ fromRow: r, fromCol: c, toRow: nr, toCol: c - 1, captures: [], steps: null });
-            if (c < BOARD_SIZE - 1 && b[nr][c + 1] === 0) moves.push({ fromRow: r, fromCol: c, toRow: nr, toCol: c + 1, captures: [], steps: null });
-        }
-    } else {
-        for (const [dr, dc] of [[-1,-1], [-1,1], [1,-1], [1,1]]) {
-            let nr = r + dr, nc = c + dc;
-            while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && b[nr][nc] === 0) {
-                moves.push({ fromRow: r, fromCol: c, toRow: nr, toCol: nc, captures: [], steps: null });
-                nr += dr; nc += dc;
-            }
-        }
-    }
-    return moves;
-}
-
-function getCapturesForPiece(b, r, c, piece, alreadyCaptured, stepsSoFar, isSearch = false) {
-    if (alreadyCaptured.length >= 12) return [];
-    const results = [], isKing = Math.abs(piece) === 2, player = piece > 0 ? 1 : -1, forwardDir = player > 0 ? -1 : 1;
-    
-    if (!isKing) {
-        const midR = r + forwardDir, landR = r + forwardDir * 2;
-        if (landR >= 0 && landR < BOARD_SIZE) {
-            for (const dc of [-1, 1]) {
-                const midC = c + dc, landC = c + dc * 2;
-                if (landC >= 0 && landC < BOARD_SIZE && b[landR][landC] === 0) {
-                    const midPiece = b[midR][midC];
-                    if (midPiece !== 0 && (midPiece > 0 ? 1 : -1) === -player && !isCaptured(alreadyCaptured, midR, midC)) {
-                        const newCap = [...alreadyCaptured, { r: midR, c: midC }];
-                        const newSteps = isSearch ? null : [...stepsSoFar, { capR: midR, capC: midC, landR, landC }];
-                        const savedOrig = b[r][c], savedLand = b[landR][landC];
-                        b[r][c] = 0; b[landR][landC] = piece;
-                        const further = getCapturesForPiece(b, landR, landC, piece, newCap, newSteps, isSearch);
-                        b[r][c] = savedOrig; b[landR][landC] = savedLand;
-                        if (further.length > 0) {
-                            for (let i = 0; i < further.length; i++) {
-                                const fc = further[i];
-                                results.push({ fromRow: r, fromCol: c, toRow: fc.toRow, toCol: fc.toCol, captures: fc.captures, steps: fc.steps });
-                            }
-                        } else {
-                            results.push({ fromRow: r, fromCol: c, toRow: landR, toCol: landC, captures: newCap, steps: newSteps });
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        for (const [dr, dc] of [[-1,-1], [-1,1], [1,-1], [1,1]]) {
-            let curR = r + dr, curC = c + dc;
-            while (curR >= 0 && curR < BOARD_SIZE && curC >= 0 && curC < BOARD_SIZE && b[curR][curC] === 0) { curR += dr; curC += dc; }
-            if (curR >= 0 && curR < BOARD_SIZE && curC >= 0 && curC < BOARD_SIZE) {
-                const midPiece = b[curR][curC];
-                if (midPiece !== 0 && (midPiece > 0 ? 1 : -1) === -player && !isCaptured(alreadyCaptured, curR, curC)) {
-                    const capR = curR, capC = curC;
-                    let landR = capR + dr, landC = capC + dc;
-                    let continuationsFound = false;
-                    const quietLandings = [];
-
-                    while (landR >= 0 && landR < BOARD_SIZE && landC >= 0 && landC < BOARD_SIZE && b[landR][landC] === 0) {
-                        const newCap = [...alreadyCaptured, { r: capR, c: capC }];
-                        const newSteps = isSearch ? null : [...stepsSoFar, { capR, capC, landR, landC }];
-                        const savedOrig = b[r][c], savedLand = b[landR][landC];
-                        b[r][c] = 0; b[landR][landC] = piece;
-                        const further = getCapturesForPiece(b, landR, landC, piece, newCap, newSteps, isSearch);
-                        b[r][c] = savedOrig; b[landR][landC] = savedLand;
-
-                        if (further.length > 0) {
-                            continuationsFound = true;
-                            for (let i = 0; i < further.length; i++) {
-                                const fc = further[i];
-                                results.push({ fromRow: r, fromCol: c, toRow: fc.toRow, toCol: fc.toCol, captures: fc.captures, steps: fc.steps });
-                            }
-                        } else {
-                            quietLandings.push({ fromRow: r, fromCol: c, toRow: landR, toCol: landC, captures: newCap, steps: newSteps });
-                        }
-                        landR += dr; landC += dc;
-                    }
-                    for (let i = 0; i < quietLandings.length; i++) {
-                        if (!isSearch || !continuationsFound || i === 0 || i === quietLandings.length - 1) {
-                            results.push(quietLandings[i]);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return results;
-}
-
-function isCaptured(list, r, c) {
-    for (let i = 0; i < list.length; i++) if (list[i].r === r && list[i].c === c) return true;
-    return false;
-}
-
-function computeZobristHash(b, player) {
-    let h = player === P2 ? zobristTurn : 0;
-    for (let r = 0; r < BOARD_SIZE; r++) {
-        for (let c = 0; c < BOARD_SIZE; c++) {
-            const p = b[r][c];
-            if (p !== 0) h ^= zobristTable[r][c][p + 2];
-        }
-    }
-    return h >>> 0;
-}
-
-function moveKey(m) {
-    return (m.fromRow * 10 + m.fromCol) * 100 + (m.toRow * 10 + m.toCol);
-}
-
-function orderMovesAdvanced(moves, b, player, ply, ttBestMove) {
-    const lastR = BOARD_SIZE - 1;
-    return moves.sort((a, bMove) => {
-        let sA = 0, sB = 0;
-        if (ttBestMove) {
-            if (a.fromRow === ttBestMove.fromRow && a.fromCol === ttBestMove.fromCol && a.toRow === ttBestMove.toRow && a.toCol === ttBestMove.toCol) sA += 50000;
-            if (bMove.fromRow === ttBestMove.fromRow && bMove.fromCol === ttBestMove.fromCol && bMove.toRow === ttBestMove.toRow && bMove.toCol === ttBestMove.toCol) sB += 50000;
-        }
-        sA += a.captures.length * 2000;
-        sB += bMove.captures.length * 2000;
-
-        if (player === P2 && a.toRow === lastR && b[a.fromRow][a.fromCol] === P2) sA += 1200;
-        if (player === P2 && bMove.toRow === lastR && b[bMove.fromRow][bMove.fromCol] === P2) sB += 1200;
-        if (player === P1 && a.toRow === 0 && b[a.fromRow][a.fromCol] === P1) sA += 1200;
-        if (player === P1 && bMove.toRow === 0 && b[bMove.fromRow][bMove.fromCol] === P1) sB += 1200;
-
-        if (ply < 32) {
-            const kA = moveKey(a), kB = moveKey(bMove);
-            if (killerMoves[ply][0] === kA || killerMoves[ply][1] === kA) sA += 900;
-            if (killerMoves[ply][0] === kB || killerMoves[ply][1] === kB) sB += 900;
-        }
-        sA += historyTable[a.fromRow * 10 + a.fromCol][a.toRow * 10 + a.toCol];
-        sB += historyTable[bMove.fromRow * 10 + bMove.fromCol][bMove.toRow * 10 + bMove.toCol];
-        return sB - sA;
-    });
-}
-
-function makeAIMove() {
+async function makeAIMove() {
+    if (isGameOver || isEditing || engineFailure || currentPlayer !== P2 || gameMode !== 'ai') { isAiThinking = false; return; }
+    const token = generation; isAiThinking = true;
     try {
-        if (isGameOver || isEditing) { isAiThinking = false; return; }
-        updateLegalMoves();
-        if (legalMoves.length === 0) {
-            isGameOver = true; isAiThinking = false; updateStatus(); return;
-        }
-        if (legalMoves.length === 1) {
-            isAiThinking = false; lastSearchDepth = 1; executeMoveStepByStep(legalMoves[0]); return;
-        }
-
-        if (difficultyLevel <= 3) {
-            let maxD = difficultyLevel === 1 ? 2 : (difficultyLevel === 2 ? 5 : 8);
-            searchEndTime = Date.now() + 400;
-            const best = iterativeDeepeningPVS(maxD);
-            isAiThinking = false; executeMoveStepByStep(best); return;
-        }
-
-        if (transpositionTable.size > 250000) transpositionTable.clear();
-        for (let i = 0; i < 100; i++) for (let j = 0; j < 100; j++) historyTable[i][j] >>= 2;
-
-        const timeLimit = difficultyLevel === 5 ? 1600 : 900;
-        const maxDepth = difficultyLevel === 5 ? 22 : 12;
-        searchEndTime = Date.now() + timeLimit;
-        const bestMove = iterativeDeepeningPVS(maxDepth);
-        isAiThinking = false;
-        executeMoveStepByStep(bestMove || legalMoves[0]);
-    } catch (err) {
-        console.error(err);
-        isAiThinking = false;
-        if (legalMoves.length > 0) executeMoveStepByStep(legalMoves[0]);
-    }
-}
-
-function iterativeDeepeningPVS(maxDepth) {
-    let bestMove = legalMoves[0]; searchAborted = false; nodesSearched = 0;
-    let ordered = orderMovesAdvanced([...legalMoves], board, P2, 0, null);
-
-    for (let depth = 1; depth <= maxDepth; depth++) {
-        if (Date.now() > searchEndTime) break;
-        let curBestMove = ordered[0], curBestEval = -Infinity, alpha = -Infinity, beta = Infinity;
-
-        for (let i = 0; i < ordered.length; i++) {
-            const move = ordered[i];
-            const nextB = applyMoveSilently(board, move);
-            let score;
-            if (i === 0) {
-                score = -pvsSearch(nextB, depth - 1, -beta, -alpha, P1, 1);
-            } else {
-                score = -pvsSearch(nextB, depth - 1, -(alpha + 1), -alpha, P1, 1);
-                if (!searchAborted && score > alpha && score < beta) {
-                    score = -pvsSearch(nextB, depth - 1, -beta, -alpha, P1, 1);
-                }
-            }
-            if (searchAborted) break;
-            if (score > curBestEval) { curBestEval = score; curBestMove = move; }
-            if (score > alpha) alpha = score;
-        }
-
-        if (!searchAborted && curBestMove) {
-            bestMove = curBestMove;
-            lastSearchDepth = depth;
-            ordered = [bestMove, ...ordered.filter(m => m !== bestMove)];
-            if (curBestEval > 90000) break;
-        } else break;
-    }
-    if (bestMove && bestMove.captures.length > 0 && !bestMove.steps) {
-        const fullMatch = legalMoves.find(m => m.fromRow === bestMove.fromRow && m.fromCol === bestMove.fromCol && m.toRow === bestMove.toRow && m.toCol === bestMove.toCol);
-        if (fullMatch) bestMove = fullMatch;
-    }
-    return bestMove;
-}
-
-function pvsSearch(b, depth, alpha, beta, player, ply) {
-    nodesSearched++;
-    if ((nodesSearched & 1023) === 0 && Date.now() > searchEndTime) { searchAborted = true; return 0; }
-
-    const bHash = computeZobristHash(b, player);
-    const tt = transpositionTable.get(bHash);
-    let ttMove = null;
-    if (tt) {
-        ttMove = tt.bestMove;
-        if (tt.depth >= depth) {
-            if (tt.flag === 0) return tt.score;
-            if (tt.flag === 1 && tt.score >= beta) return tt.score;
-            if (tt.flag === 2 && tt.score <= alpha) return tt.score;
-        }
-    }
-
-    let moves = getAllLegalMoves(b, player, true);
-    if (moves.length === 0) return -100000 + ply;
-
-    if (moves[0].captures.length > 0 && ply < 26) depth += 1;
-
-    if (depth <= 0) {
-        return quiescenceTacticalSearch(b, alpha, beta, player, 8);
-    }
-
-    moves = orderMovesAdvanced(moves, b, player, ply, ttMove);
-    let origAlpha = alpha, bestScore = -Infinity, bestMove = moves[0];
-
-    for (let i = 0; i < moves.length; i++) {
-        const move = moves[i];
-        const nextB = applyMoveSilently(b, move);
-        let score;
-
-        let reduction = 0;
-        if (depth >= 3 && i >= 3 && move.captures.length === 0) reduction = 1;
-
-        if (i === 0) {
-            score = -pvsSearch(nextB, depth - 1, -beta, -alpha, -player, ply + 1);
-        } else {
-            score = -pvsSearch(nextB, depth - 1 - reduction, -(alpha + 1), -alpha, -player, ply + 1);
-            if (!searchAborted && score > alpha && reduction > 0) {
-                score = -pvsSearch(nextB, depth - 1, -(alpha + 1), -alpha, -player, ply + 1);
-            }
-            if (!searchAborted && score > alpha && score < beta) {
-                score = -pvsSearch(nextB, depth - 1, -beta, -alpha, -player, ply + 1);
-            }
-        }
-
-        if (searchAborted) return 0;
-        if (score > bestScore) { bestScore = score; bestMove = move; }
-        if (score > alpha) alpha = score;
-        if (alpha >= beta) {
-            if (move.captures.length === 0 && ply < 32) {
-                const mk = moveKey(move);
-                if (killerMoves[ply][0] !== mk) {
-                    killerMoves[ply][1] = killerMoves[ply][0];
-                    killerMoves[ply][0] = mk;
-                }
-                historyTable[move.fromRow * 10 + move.fromCol][move.toRow * 10 + move.toCol] += depth * depth;
-            }
-            break;
-        }
-    }
-
-    const flag = bestScore <= origAlpha ? 2 : (bestScore >= beta ? 1 : 0);
-    transpositionTable.set(bHash, { depth, score: bestScore, flag, bestMove });
-    return bestScore;
-}
-
-function quiescenceTacticalSearch(b, alpha, beta, player, qDepth) {
-    if ((++nodesSearched & 1023) === 0 && Date.now() > searchEndTime) { searchAborted = true; return 0; }
-    let moves = getAllLegalMoves(b, player, true);
-    if (moves.length === 0) return -100000;
-
-    if (qDepth <= 0 || moves[0].captures.length === 0) {
-        const evalP2 = evaluateGrandmaster(b);
-        return player === P2 ? evalP2 : -evalP2;
-    }
-
-    for (let i = 0; i < moves.length; i++) {
-        const score = -quiescenceTacticalSearch(applyMoveSilently(b, moves[i]), -beta, -alpha, -player, qDepth - 1);
-        if (searchAborted) return 0;
-        if (score >= beta) return beta;
-        if (score > alpha) alpha = score;
-    }
-    return alpha;
-}
-
-function evaluateGrandmaster(b) {
-    let score = 0, aiMen = 0, huMen = 0, aiKings = 0, huKings = 0;
-    let aiMobility = 0, huMobility = 0;
-    const lastR = BOARD_SIZE - 1;
-
-    for (let r = 0; r < BOARD_SIZE; r++) {
-        for (let c = 0; c < BOARD_SIZE; c++) {
-            const p = b[r][c];
-            if (p === 0) continue;
-
-            if (p === P2) {
-                aiMen++;
-                let v = 130 + (r * r) * 1.1;
-                if (r === 0) v += 55;
-                if (c === 0 || c === lastR) v += 22;
-                if (c >= 2 && c <= lastR - 2 && r >= 2 && r <= lastR - 2) v += 16;
-                const backL = (r > 0 && c > 0 && b[r - 1][c - 1] < 0);
-                const backR = (r > 0 && c < lastR && b[r - 1][c + 1] < 0);
-                if (backL && backR) v += 28;
-                else if (backL || backR) v += 14;
-
-                if (r === lastR - 1 && ((c > 0 && b[lastR][c - 1] === 0) || (c < lastR && b[lastR][c + 1] === 0))) v += 85;
-                if (!backL && !backR && r > 1 && r < lastR - 1 && c > 0 && c < lastR) v -= 18;
-
-                if (r < lastR) {
-                    if (c > 0 && b[r + 1][c - 1] === 0) aiMobility++;
-                    if (c < lastR && b[r + 1][c + 1] === 0) aiMobility++;
-                }
-                score += v;
-            } else if (p === P1) {
-                huMen++;
-                const adv = lastR - r;
-                let v = 130 + (adv * adv) * 1.1;
-                if (r === lastR) v += 55;
-                if (c === 0 || c === lastR) v += 22;
-                if (c >= 2 && c <= lastR - 2 && r >= 2 && r <= lastR - 2) v += 16;
-                const backL = (r < lastR && c > 0 && b[r + 1][c - 1] > 0);
-                const backR = (r < lastR && c < lastR && b[r + 1][c + 1] > 0);
-                if (backL && backR) v += 28;
-                else if (backL || backR) v += 14;
-
-                if (r === 1 && ((c > 0 && b[0][c - 1] === 0) || (c < lastR && b[0][c + 1] === 0))) v += 85;
-                if (!backL && !backR && r > 1 && r < lastR - 1 && c > 0 && c < lastR) v -= 18;
-
-                if (r > 0) {
-                    if (c > 0 && b[r - 1][c - 1] === 0) huMobility++;
-                    if (c < lastR && b[r - 1][c + 1] === 0) huMobility++;
-                }
-                score -= v;
-            } else if (p === -2) {
-                aiKings++;
-                let kv = 520;
-                if (r === c || r + c === lastR) kv += 40;
-                if (r >= 2 && r <= lastR - 2 && c >= 2 && c <= lastR - 2) kv += 25;
-                score += kv;
-            } else if (p === 2) {
-                huKings++;
-                let kv = 520;
-                if (r === c || r + c === lastR) kv += 40;
-                if (r >= 2 && r <= lastR - 2 && c >= 2 && c <= lastR - 2) kv += 25;
-                score -= kv;
-            }
-        }
-    }
-
-    score += (aiMobility - huMobility) * 12;
-
-    const totalAi = aiMen + aiKings, totalHu = huMen + huKings;
-    if (totalAi > totalHu) {
-        score += ((totalAi - totalHu) * 80) / Math.max(1, totalHu);
-    } else if (totalHu > totalAi) {
-        score -= ((totalHu - totalAi) * 80) / Math.max(1, totalAi);
-    }
-
-    return score;
+        const result = await engineCall(1);
+        if (token !== generation) return;
+        if (!result.best) { isAiThinking = false; isGameOver = true; updateStatus(); return; }
+        const signature = m => JSON.stringify([m.fromRow,m.fromCol,m.toRow,m.toCol,m.captures,m.steps]);
+        if (!legalMoves.some(m => signature(m) === signature(result.best))) throw Error('Illegal engine response');
+        lastSearchDepth = result.depth; nodesSearched = result.nodes;
+        document.getElementById('engine-analysis').textContent =
+            'C++20 / WASM · ' + Math.round(result.elapsedMs) + ' ms · ' + result.nodes + ' nodes · ' +
+            result.plans.map((p,i) => 'ABCD'[i] + ': (' + (p.move.fromRow+1) + ',' + (p.move.fromCol+1) + ')→(' + (p.move.toRow+1) + ',' + (p.move.toCol+1) + ') ' + p.score).join(' / ') +
+            (currentLang === 'fr' ? ' — Évaluations, piège non prouvé' : ' — تقييمات، الفخ ماشي مثبت');
+        isAiThinking = false; executeMoveStepByStep(result.best);
+    } catch (error) { if(token === generation) showEngineError(error); }
 }
 
 // Versioned, device-local autosave. Never commit an unfinished capture animation.
 const DAMA_SAVE_KEY = 'dama15.autosave.v1';
-const DAMA_SAVE_ENGINE = 'js';
+const DAMA_SAVE_ENGINE = 'wasm';
 let restoringSavedGame = true, customPieceColors = false;
 let stableSavedGame = null, lastSavedText = '', saveUnavailable = false;
 
