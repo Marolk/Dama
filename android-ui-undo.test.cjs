@@ -3,7 +3,7 @@ const { execFile } = require('node:child_process');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 (async () => {
- const browser = await chromium.launch({headless:true});
+ const browser = await chromium.launch({headless:true, ...(process.env.DAMA_CHROMIUM_PATH ? {executablePath:process.env.DAMA_CHROMIUM_PATH} : {})});
  try {
  const page = await browser.newPage({viewport:{width:412,height:915}});
  const errors=[]; page.on('pageerror',e=>errors.push(e.message));
@@ -143,5 +143,7 @@ const path = require('node:path');
 
  assert.deepEqual(errors,[]);
  console.log('PASS: visible Undo; repeated 2-player undo; double capture; promotion; actual C++ AI reply + two-ply undo; Offline/Online labels; 3-second default.');
+ await require('./persistence.test.cjs').runPersistenceTests(browser,'file://'+path.resolve(process.argv[2]));
+ await require('./persistence.test.cjs').runPersistentProfileTest(chromium,'file://'+path.resolve(process.argv[2]));
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

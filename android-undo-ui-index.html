@@ -305,6 +305,7 @@ body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#
             <button class="seg-btn" id="mode-2p" onclick="setMode('2p')">👥 جوج فالجهاز</button>
         </div>
         <button class="btn-action" onclick="undoLastMove()" id="ui-btn-undo" disabled style="background:#70563a;color:#fff;opacity:.45;">↶ رجوع حركة</button>
+        <p id="save-status" role="status" style="font-size:.78rem;color:var(--text-muted)">الحفظ تلقائي فهاد الجهاز.</p>
         <button class="btn-action" onclick="initGame()" id="ui-btn-new">🔄 طرح جديد</button>
     </div>
 </div>
@@ -364,12 +365,14 @@ function makePieceGradient(hex) {
 }
 
 function updatePieceColors() {
+    customPieceColors = true;
     const c1 = document.getElementById('picker-p1').value;
     const c2 = document.getElementById('picker-p2').value;
     document.documentElement.style.setProperty('--piece-p1', makePieceGradient(c1));
     document.documentElement.style.setProperty('--piece-p1-border', '#111');
     document.documentElement.style.setProperty('--piece-p2', makePieceGradient(c2));
     document.documentElement.style.setProperty('--piece-p2-border', '#111');
+    saveUserGame();
 }
 
 function swapPieceColors() {
@@ -382,6 +385,7 @@ function swapPieceColors() {
 }
 
 function setDefaultPiecePresetColors(p1IsBlack) {
+    customPieceColors = false;
     if (p1IsBlack) {
         document.getElementById('picker-p1').value = '#1c1c1c';
         document.getElementById('picker-p2').value = '#c49655';
@@ -399,7 +403,7 @@ function setDefaultPiecePresetColors(p1IsBlack) {
     }
 }
 
-function applyBoardPreset(num) {
+function configureBoardPreset(num) {
     currentPreset = num;
     [1, 2, 3, 4].forEach(n => document.getElementById('pres-' + n).classList.toggle('active', n === num));
 
@@ -420,6 +424,11 @@ function applyBoardPreset(num) {
         setDefaultPiecePresetColors(false);
         setBoardColors('#5c4632', '#e8dec8', '#d6c6b2');
     }
+
+}
+
+function applyBoardPreset(num) {
+    configureBoardPreset(num);
     initGame();
 }
 
@@ -479,6 +488,7 @@ function setDiff(d) {
         btn.classList.toggle('active',v===d);btn.setAttribute('aria-pressed',String(v===d));
     });
     updateDifficultyHint();
+    saveUserGame();
 }
 
 function updateDifficultyHint() {
@@ -490,6 +500,7 @@ function updateDifficultyHint() {
 function toggleColorPanel() {
     isColorOpen = !isColorOpen;
     document.getElementById('color-panel').classList.toggle('active', isColorOpen);
+    saveUserGame();
 }
 
 function rotateBoard(delta) {
@@ -524,6 +535,7 @@ function toggleEditorMode() {
     } else {
         document.getElementById('turn-modal').classList.add('active');
     }
+    saveUserGame();
 }
 
 function finalizeEdit(chosenPlayer) {
@@ -555,6 +567,7 @@ function selectEditorPiece(val) {
     document.getElementById('opt-neg').classList.toggle('selected-opt', val === -1);
     document.getElementById('opt-king-neg').classList.toggle('selected-opt', val === -2);
     document.getElementById('opt-0').classList.toggle('selected-opt', val === 0);
+    saveUserGame();
 }
 
 function initGame() {
@@ -846,6 +859,7 @@ function updateLegalMoves() {
 }
 
 function updateStatus() {
+    saveUserGame();
     updateUndoButton();
     const t = i18n[currentLang];
     let p1Count = 0, p2Count = 0;
@@ -1064,7 +1078,140 @@ window.damaNativeResult=function(envelope){
  }catch(err){console.error(err);isAiThinking=false;updateStatus();alert('خطأ محرك C++: '+err.message);}
 };
 
-applyBoardPreset(1);
+// Versioned, device-local autosave. Never commit an unfinished capture animation.
+const DAMA_SAVE_KEY = 'dama15.autosave.v1';
+const DAMA_SAVE_ENGINE = 'native';
+let restoringSavedGame = true, customPieceColors = false;
+let stableSavedGame = null, lastSavedText = '', saveUnavailable = false;
+
+function showSaveStatus() {
+    const el = document.getElementById('save-status');
+    if (!el) return;
+    el.textContent = saveUnavailable
+        ? (currentLang === 'fr' ? 'Sauvegarde indisponible sur cet appareil.' : 'تعذر الحفظ فهاد الجهاز.')
+        : (currentLang === 'fr' ? 'Sauvegarde automatique sur cet appareil.' : 'الحفظ تلقائي فهاد الجهاز.');
+    el.style.color = saveUnavailable ? '#ff9393' : '';
+}
+function validSavedBoard(value) {
+    return Array.isArray(value) && value.length === BOARD_SIZE && value.every((row, r) =>
+        Array.isArray(row) && row.length === BOARD_SIZE && row.every((piece, c) =>
+            Number.isInteger(piece) && piece >= -2 && piece <= 2 && (piece === 0 || isDarkSquareCheck(r, c))));
+}
+function savedLastMove(value) {
+    if (!value || !['fromRow','fromCol','toRow','toCol'].every(k =>
+        Number.isInteger(value[k]) && value[k] >= 0 && value[k] < BOARD_SIZE)) return null;
+    return {fromRow:value.fromRow, fromCol:value.fromCol, toRow:value.toRow, toCol:value.toCol};
+}
+function savedPosition(value) {
+    if (!value || !validSavedBoard(value.board) || ![P1,P2].includes(value.currentPlayer) ||
+        !Number.isInteger(value.moveCount) || value.moveCount < 0 || value.moveCount > 10000000) return null;
+    return {board:value.board.map(row => row.slice()), currentPlayer:value.currentPlayer,
+        moveCount:value.moveCount, lastMove:savedLastMove(value.lastMove),
+        isGameOver:!!value.isGameOver,
+        lastSearchDepth:Number.isInteger(value.lastSearchDepth) ? Math.max(0, Math.min(256,value.lastSearchDepth)) : 0,
+        captureTrail:null};
+}
+function saveUserGame() {
+    if (restoringSavedGame || !validSavedBoard(board)) return;
+    if (!isAnimating) {
+        stableSavedGame = {board:board.map(row => row.slice()), currentPlayer, moveCount, lastMove:savedLastMove(lastMove),
+            isGameOver, lastSearchDepth, isEditing, selectedEditorValue};
+        if (DAMA_SAVE_ENGINE === 'native') stableSavedGame.undo = moveHistory.slice(-128).map(savedPosition).filter(Boolean);
+        if (DAMA_SAVE_ENGINE === 'wasm') stableSavedGame.positions = positionHistory.slice();
+    }
+    const time = document.getElementById('ai-time');
+    const settings = {preset:currentPreset, rotation:currentRotation, mode:gameMode, difficulty:difficultyLevel,
+        lang:currentLang, startingPlayer, p1:document.getElementById('picker-p1').value,
+        p2:document.getElementById('picker-p2').value, customPieceColors, colorOpen:isColorOpen,
+        aiTime:time ? Number(time.value) : null};
+    try {
+        const text = JSON.stringify({version:1, settings, game:stableSavedGame});
+        if (text !== lastSavedText) { localStorage.setItem(DAMA_SAVE_KEY, text); lastSavedText = text; }
+        saveUnavailable = false;
+    } catch (_) { saveUnavailable = true; }
+    showSaveStatus();
+}
+async function startSavedGame() {
+    let stored = null;
+    try {
+        const raw = localStorage.getItem(DAMA_SAVE_KEY);
+        if (raw && raw.length <= 2000000) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.version === 1 && parsed.settings && typeof parsed.settings === 'object') stored = parsed;
+        }
+    } catch (_) { /* Invalid/unavailable storage never prevents a playable board. */ }
+    const s = stored ? stored.settings : {};
+    configureBoardPreset([1,2,3,4].includes(s.preset) ? s.preset : 1);
+    currentRotation = [0,90,180,270].includes(s.rotation) ? s.rotation : 0;
+    gameMode = ['ai','2p'].includes(s.mode) ? s.mode : 'ai';
+    const maxDiff = document.getElementById('diff-6') ? 6 : 5;
+    difficultyLevel = Number.isInteger(s.difficulty) && s.difficulty >= 1 && s.difficulty <= maxDiff ? s.difficulty : 5;
+    currentLang = ['ar','fr'].includes(s.lang) ? s.lang : 'ar';
+    startingPlayer = [P1,P2].includes(s.startingPlayer) ? s.startingPlayer : P1;
+    isColorOpen = s.colorOpen === true;
+    document.getElementById('color-panel').classList.toggle('active', isColorOpen);
+    for (let n = 1; n <= maxDiff; n++) {
+        const btn = document.getElementById('diff-' + n);
+        btn.classList.toggle('active', n === difficultyLevel);
+        btn.setAttribute('aria-pressed', String(n === difficultyLevel));
+    }
+    ['ai','2p'].forEach(mode => document.getElementById('mode-' + mode).classList.toggle('active', mode === gameMode));
+    [P1,P2].forEach(p => document.getElementById(p === P1 ? 'start-p1' : 'start-p2').classList.toggle('active', p === startingPlayer));
+    const time = document.getElementById('ai-time');
+    if (time && [500,1000,2000,3000].includes(s.aiTime)) time.value = String(s.aiTime);
+    if (s.customPieceColors === true && /^#[0-9a-f]{6}$/i.test(s.p1) && /^#[0-9a-f]{6}$/i.test(s.p2)) {
+        document.getElementById('picker-p1').value = s.p1;
+        document.getElementById('picker-p2').value = s.p2;
+        updatePieceColors();
+    }
+    document.getElementById('board').style.transform = `rotate(${currentRotation}deg)`;
+    const restored = stored && savedPosition(stored.game);
+    if (!restored) {
+        board = Array.from({length:BOARD_SIZE}, () => Array(BOARD_SIZE).fill(0));
+        setLang(currentLang);
+        restoringSavedGame = false;
+        await initGame();
+        return;
+    }
+    if (DAMA_SAVE_ENGINE === 'wasm') resetEngineSession();
+    board = restored.board; currentPlayer = restored.currentPlayer; moveCount = restored.moveCount;
+    lastMove = restored.lastMove; lastSearchDepth = restored.lastSearchDepth;
+    isGameOver = false; selectedSquare = null; isAnimating = false; isAiThinking = false;
+    isEditing = stored.game.isEditing === true;
+    selectedEditorValue = [-2,-1,0,1,2].includes(stored.game.selectedEditorValue) ? stored.game.selectedEditorValue : 1;
+    if (DAMA_SAVE_ENGINE === 'native') {
+        moveHistory = Array.isArray(stored.game.undo) ? stored.game.undo.slice(-128).map(savedPosition).filter(Boolean) : [];
+    }
+    if (DAMA_SAVE_ENGINE === 'wasm') {
+        // updateLegalMoves appends the current hash; do not count it twice on reload.
+        positionHistory = Array.isArray(stored.game.positions) ? stored.game.positions.filter(h =>
+            typeof h === 'string' && /^[0-9a-f]{1,32}$/i.test(h)).slice(0,-1) : [];
+    }
+    const el = document.getElementById('board');
+    el.style.gridTemplateColumns = `repeat(${BOARD_SIZE}, 1fr)`;
+    el.style.gridTemplateRows = `repeat(${BOARD_SIZE}, 1fr)`;
+    document.getElementById('editor-toolbar').classList.toggle('active', isEditing);
+    document.getElementById('ui-btn-edit').style.background = isEditing ? '#27ae60' : '#8e44ad';
+    selectEditorPiece(selectedEditorValue);
+    setLang(currentLang);
+    const token = DAMA_SAVE_ENGINE === 'wasm' ? generation : null;
+    if (!isEditing) await updateLegalMoves();
+    restoringSavedGame = false;
+    if (DAMA_SAVE_ENGINE === 'wasm' && token !== generation) return;
+    renderBoard(); updateStatus(); saveUserGame();
+    if (!isEditing && !isGameOver && gameMode === 'ai' && currentPlayer === P2) {
+        isAiThinking = true;
+        document.getElementById('ui-turn-val').textContent = i18n[currentLang].thinking;
+        aiTimeoutId = setTimeout(makeAIMove, 200);
+    }
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveUserGame(); });
+window.addEventListener('pagehide', saveUserGame);
+const savedTimeControl = document.getElementById('ai-time');
+if (savedTimeControl) savedTimeControl.addEventListener('change', saveUserGame);
+
+startSavedGame();
+
 </script>
 </body>
 </html>
