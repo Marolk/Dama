@@ -153,6 +153,14 @@ body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#
 .seg-btn.impossible-btn {grid-column:1 / -1;padding:12px;font-size:.92rem;border:1px solid #a17aff66;background:#30203f;color:#eadfff;}
 .seg-btn.impossible-btn.active {background:linear-gradient(120deg,#511a69,#ba224e);border-color:#eaa8ff;color:#fff;box-shadow:0 2px 14px #a82e6b55;}
 .impossible-note {font-size:.78rem;line-height:1.7;color:#d8badf;margin:0;padding:9px;border-inline-start:3px solid #b478db;}
+
+.difficulty-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.difficulty-grid .seg-btn {white-space:normal;min-height:46px;line-height:1.5;}
+.difficulty-grid #diff-6,.difficulty-grid #diff-7 {grid-column:1 / -1;}
+.seg-btn.remontada-btn {background:linear-gradient(120deg,#390a13,#681125);border:2px solid #b94359;color:#ffe5ea;padding:14px 10px;font-size:1rem;font-weight:800;}
+.seg-btn.remontada-btn.active {background:linear-gradient(120deg,#76152c,#a71f38);border-color:#ff9caf;box-shadow:0 0 0 2px #44101a,0 3px 16px #a71f3855;color:#fff;}
+.seg-btn:focus-visible {outline:3px solid #fff;outline-offset:3px;}
+.remontada-note {color:#ffd0d8;border-inline-start:3px solid #c1455c;padding:9px;font-size:.8rem;line-height:1.7;margin:8px 0;}
 </style>
 </head>
 <body>
@@ -283,16 +291,17 @@ body { background: radial-gradient(ellipse at 50% 0,#3b3026 0,transparent 60%),#
         </select>
         <p style="font-size:.75rem;color:#a39481;margin:0">محرك بحث تكتيكي: كيقلب على الفخاخ والتضحيات المحسوبة، وكيحتافظ بعدة خطط بديلة. العمق الفعلي كيتبدل حسب الوضعية. ما كيضمنش الربح. يمكن الواجهة توقف لحظة أثناء الحساب.</p>
         <div class="section-label" id="ui-diff-label">مستوى القوة الحسابية:</div>
-        <div class="segmented-control five-cols" id="diff-group">
-            <button class="seg-btn" id="diff-1" onclick="setDiff(1)">ساهل</button>
+        <div class="segmented-control difficulty-grid" id="diff-group" role="group" aria-label="Niveau de difficulté">
             <button class="seg-btn" id="diff-2" onclick="setDiff(2)">متوسط</button>
-            <button class="seg-btn" id="diff-3" onclick="setDiff(3)">صعيب</button>
-            <button class="seg-btn" id="diff-4" onclick="setDiff(4)">💀 ديمون</button>
-            <button class="seg-btn devil-btn active" id="diff-5" onclick="setDiff(5)">🔥 إعجازي</button>
-            <button class="seg-btn impossible-btn" id="diff-6" aria-pressed="false" onclick="setDiff(6)">☠️ المستحيل — فخاخ وتضحيات</button>
+            <button class="seg-btn" id="diff-3" onclick="setDiff(3)">صعب</button>
+            <button class="seg-btn" id="diff-4" onclick="setDiff(4)">ديمون</button>
+            <button class="seg-btn devil-btn active" id="diff-5" onclick="setDiff(5)">إعجازي</button>
+            <button class="seg-btn impossible-btn" id="diff-6" aria-pressed="false" onclick="setDiff(6)">المستحيل — فخاخ وتضحيات</button>
+            <button class="seg-btn remontada-btn" id="diff-7" aria-pressed="false" onclick="setDiff(7)">😈 الشيطان الأعظم — REMONTADA</button>
         </div>
 
         <p id="impossible-note" class="impossible-note" hidden>كيقلب على التضحيات والفخاخ والضدّات. هادي توقعات البحث، ماشي ضمان الربح. وقت التفكير كيبقى حسب الاختيار ديالك.</p>
+        <p id="remontada-note" class="remontada-note" hidden></p>
         <!-- خيار تحديد من يبدأ الطرح -->
         <div class="section-label" id="ui-starter-label">شكون يبدا الطرح اللول:</div>
         <div class="segmented-control">
@@ -482,8 +491,9 @@ function setMode(mode) {
 }
 
 function setDiff(d) {
+    if (![2,3,4,5,6,7].includes(d)) return;
     difficultyLevel = d;
-    [1, 2, 3, 4, 5, 6].forEach(v => {
+    [2, 3, 4, 5, 6, 7].forEach(v => {
         const btn=document.getElementById('diff-' + v);
         btn.classList.toggle('active',v===d);btn.setAttribute('aria-pressed',String(v===d));
     });
@@ -492,10 +502,19 @@ function setDiff(d) {
 }
 
 function updateDifficultyHint() {
-    document.getElementById('diff-6').textContent = currentLang==='fr' ? '☠️ Impossible — pièges et sacrifices' : '☠️ المستحيل — فخاخ وتضحيات';
+    updateRemontadaHint();
+    document.getElementById('diff-6').textContent = currentLang==='fr' ? 'Impossible — pièges et sacrifices' : 'المستحيل — فخاخ وتضحيات';
     const note=document.getElementById('impossible-note');
     note.hidden = difficultyLevel!==6;
     note.textContent=currentLang==='fr' ? 'Recherche de sacrifices, pièges et contre-attaques. Ce sont des estimations de recherche, sans victoire garantie. Le temps choisi reste appliqué.' : 'كيقلب على التضحيات والفخاخ والضدّات. هادي توقعات البحث، ماشي ضمان الربح. وقت التفكير كيبقى حسب الاختيار ديالك.';
+}
+function updateRemontadaHint() {
+    const fr=currentLang==='fr';
+    const labels=fr ? ['Moyen','Difficile','Démon','Prodigieux','Impossible — pièges et sacrifices','😈 الشيطان الأعظم — REMONTADA'] : ['متوسط','صعب','ديمون','إعجازي','المستحيل — فخاخ وتضحيات','😈 الشيطان الأعظم — REMONTADA'];
+    [2,3,4,5,6,7].forEach((v,i)=>document.getElementById('diff-'+v).textContent=labels[i]);
+    const note=document.getElementById('remontada-note');
+    note.hidden=difficultyLevel!==7;
+    note.textContent=fr ? 'Pièges, prises forcées et promotions. À évaluation égale, préfère une remontée tactique vérifiée. Aucun handicap volontaire ; la profondeur dépend du temps choisi.' : 'فخاخ، أكل إجباري وترقية. إلا كانت الخطط بنفس التقييم، كيختار التضحية المحسوبة والريمونتادا. بلا خسارة متعمدة؛ عمق الحساب حسب الوقت المختار.';
 }
 function toggleColorPanel() {
     isColorOpen = !isColorOpen;
@@ -1144,13 +1163,14 @@ async function startSavedGame() {
     configureBoardPreset([1,2,3,4].includes(s.preset) ? s.preset : 1);
     currentRotation = [0,90,180,270].includes(s.rotation) ? s.rotation : 0;
     gameMode = ['ai','2p'].includes(s.mode) ? s.mode : 'ai';
-    const maxDiff = document.getElementById('diff-6') ? 6 : 5;
-    difficultyLevel = Number.isInteger(s.difficulty) && s.difficulty >= 1 && s.difficulty <= maxDiff ? s.difficulty : 5;
+    const availableDifficulties = [2,3,4,5,6,7];
+    // Old Easy saves migrate to Medium; no removed button is accessed.
+    difficultyLevel = s.difficulty === 1 ? 2 : (availableDifficulties.includes(s.difficulty) ? s.difficulty : 5);
     currentLang = ['ar','fr'].includes(s.lang) ? s.lang : 'ar';
     startingPlayer = [P1,P2].includes(s.startingPlayer) ? s.startingPlayer : P1;
     isColorOpen = s.colorOpen === true;
     document.getElementById('color-panel').classList.toggle('active', isColorOpen);
-    for (let n = 1; n <= maxDiff; n++) {
+    for (const n of availableDifficulties) {
         const btn = document.getElementById('diff-' + n);
         btn.classList.toggle('active', n === difficultyLevel);
         btn.setAttribute('aria-pressed', String(n === difficultyLevel));

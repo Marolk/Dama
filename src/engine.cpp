@@ -1,3 +1,6 @@
+#define DAMA_EMBEDDED
+#include "../android-native/engine.cpp"
+#undef DAMA_EMBEDDED
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -84,8 +87,19 @@ extern "C" const char* dama_request(const char* input){
  if(!(in>>version>>op>>p.n>>p.side>>ms>>depth)||version!=1||(op!=0&&op!=1)||(p.n!=8&&p.n!=10)||std::abs(p.side)!=1)return "{\"error\":\"Invalid protocol header\"}";
  for(int i=0;i<p.n*p.n;i++)if(!(in>>p.b[i])||std::abs(p.b[i])>2)return "{\"error\":\"Invalid board\"}";
  std::vector<uint64_t> previous;if(!(in>>count)||count<0||count>10000)return "{\"error\":\"Invalid history\"}";for(int i=0;i<count;i++){uint64_t h;if(!(in>>h))return "{\"error\":\"Invalid history hash\"}";previous.push_back(h);}
+ int strategy=0;in>>strategy;
  guard.active=false;auto moves=legal(p);std::ostringstream o;o<<"{\"version\":1,\"hash\":\""<<hash(p)<<"\",\"moves\":[";for(size_t i=0;i<moves.size();i++){if(i)o<<',';o<<moveJSON(moves[i],p.n);}o<<']';
- if(op==1){Search s;auto r=s.run(p,ms,std::clamp(depth,1,30),previous);o<<",\"best\":"<<(moves.empty()||r.draw?"null":moveJSON(r.best,p.n))<<",\"draw\":"<<(r.draw?"true":"false")<<",\"depth\":"<<r.depth<<",\"nodes\":"<<r.nodes<<",\"elapsedMs\":"<<r.ms<<",\"score\":"<<r.score<<",\"proof\":\"evaluation-only\",\"plans\":[";for(size_t i=0;i<std::min(size_t(4),r.plans.size());i++){if(i)o<<',';o<<"{\"score\":"<<r.plans[i].first<<",\"move\":"<<moveJSON(r.plans[i].second,p.n)<<'}';}o<<']';}o<<'}';output=o.str();return output.c_str();
+ if(op==1){Search s;Result r;
+ if(strategy>=6&&strategy<=7) {
+  auto start=Clock::now();native_engine::Board b;b.n=p.n;for(int i=0;i<p.n*p.n;i++)b.a[i]=p.b[i];b.bits();
+  r.draw=std::count(previous.begin(),previous.end(),hash(p))>=2;
+  if(!r.draw&&!moves.empty()) {
+   auto nr=strategy==7?native_engine::Remontada::choose(b,p.side,ms).result:native_engine::TrapMaster::choose(b,p.side,ms);
+   r.best={nr.best.from,nr.best.to,nr.best.caps,nr.best.path};r.depth=nr.depth;r.score=nr.score;r.nodes=nr.nodes;
+  }
+  r.ms=std::chrono::duration<double,std::milli>(Clock::now()-start).count();
+ } else r=s.run(p,ms,std::clamp(depth,1,30),previous);
+ o<<",\"strategy\":"<<strategy;o<<",\"best\":"<<(moves.empty()||r.draw?"null":moveJSON(r.best,p.n))<<",\"draw\":"<<(r.draw?"true":"false")<<",\"depth\":"<<r.depth<<",\"nodes\":"<<r.nodes<<",\"elapsedMs\":"<<r.ms<<",\"score\":"<<r.score<<",\"proof\":\"evaluation-only\",\"plans\":[";for(size_t i=0;i<std::min(size_t(4),r.plans.size());i++){if(i)o<<',';o<<"{\"score\":"<<r.plans[i].first<<",\"move\":"<<moveJSON(r.plans[i].second,p.n)<<'}';}o<<']';}o<<'}';output=o.str();return output.c_str();
 }
 #ifdef DAMA_CLI
 #include <iostream>
