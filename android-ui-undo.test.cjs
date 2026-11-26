@@ -17,6 +17,7 @@ const path = require('node:path');
    window.lastNativePayload=envelope;
    const i=envelope.indexOf('|');
    const answer=await window.nativeTestSolve(envelope.slice(i+1));
+   window.lastNativeAnswer=answer;
    window.damaNativeResult(envelope.slice(0,i)+'|'+answer);
   }};
   setMode('2p');
@@ -141,6 +142,27 @@ const path = require('node:path');
  await page.locator('#ui-btn-undo').click();assert.deepEqual(await state(),afterBait);
  console.log('PASS Impossible level 6: actual native bait, forced human capture and triple countercapture; Undo restores the bait position.');
 
+ // Every visible button must route its own difficulty to the real native engine.
+ assert.equal(await page.locator('#diff-1').count(),0);
+ assert.deepEqual(await page.locator('#diff-group button').evaluateAll(xs=>xs.map(x=>x.id)),['diff-2','diff-3','diff-4','diff-5','diff-6','diff-7']);
+ for(const level of [2,3,4,5,6,7]) {
+  await page.locator('#diff-'+level).click();
+  assert.equal(await page.locator('#diff-group [aria-pressed="true"]').count(),1);
+  await page.evaluate(()=>{
+   cancelPendingAnimation();moveHistory=[];BOARD_SIZE=8;
+   board=Array.from({length:8},()=>Array(8).fill(0));board[2][5]=-2;board[5][4]=1;
+   currentPlayer=P2;gameMode='ai';isEditing=false;isGameOver=false;isAnimating=false;isAiThinking=true;
+   document.getElementById('ai-time').value='500';
+   updateLegalMoves();renderBoard();updateStatus();makeAIMove();
+  });
+  await page.waitForFunction(()=>!isAiThinking&&!isAnimating&&currentPlayer===P1,{},{timeout:10000});
+  assert.equal(await page.evaluate(()=>Number(window.lastNativePayload.split('|')[1].trim().split(/\s+/)[3])),level);
+  if(level===7)assert.equal(await page.evaluate(()=>window.lastNativeAnswer.trim().split(/\s+/).at(-1)),'7');
+ }
+ await page.locator('#diff-7').screenshot({path:'dama-remontada-button.png'});
+ assert.equal(await page.locator('#remontada-note').isVisible(),true);
+ console.log('PASS all six difficulty buttons dispatch to the actual native engine; REMONTADA has strategy 7.');
+ await require('./tests/difficulty.cjs').runDifficultyTests(browser,'file://'+path.resolve(process.argv[2]));
  assert.deepEqual(errors,[]);
  console.log('PASS: visible Undo; repeated 2-player undo; double capture; promotion; actual C++ AI reply + two-ply undo; Offline/Online labels; 3-second default.');
  await require('./persistence.test.cjs').runPersistenceTests(browser,'file://'+path.resolve(process.argv[2]));

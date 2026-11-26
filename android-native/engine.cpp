@@ -11,6 +11,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef DAMA_EMBEDDED
+namespace native_engine {
+#endif
 using namespace std;
 using Clock=chrono::steady_clock;
 struct Board { int n=10; array<int8_t,100> a{}; uint64_t occLo=0,occHi=0; void bits(){occLo=occHi=0;for(int i=0;i<n*n;i++)if(a[i]){if(i<64)occLo|=1ULL<<i;else occHi|=1ULL<<(i-64);}}};
@@ -270,17 +273,21 @@ static Result choose(const Board&b,int side,int milliseconds){
 }
 } // namespace TrapMaster
 
+#include "remontada.h"
+
+#ifndef DAMA_EMBEDDED
 static string solve(const string&input){
  istringstream ss(input);Board b;int side=0,ms=2900,threads=4;
  if(!(ss>>b.n>>side>>ms>>threads)||!(b.n==8||b.n==10)||abs(side)!=1)return "ERROR invalid header";
  for(int i=0;i<b.n*b.n;i++){int v;if(!(ss>>v)||v<-2||v>2)return "ERROR invalid board";b.a[i]=v;}
- b.bits();if(moves(b,side).empty())return "ERROR no legal moves";auto r=threads==6?TrapMaster::choose(b,side,ms):choose(b,side,ms,threads);
+ b.bits();if(moves(b,side).empty())return "ERROR no legal moves";auto r=threads==7?Remontada::choose(b,side,ms).result:(threads==6?TrapMaster::choose(b,side,ms):choose(b,side,ms,threads));
  ostringstream out;out<<r.best.from<<' '<<r.best.to<<' '<<r.best.caps.size();for(int x:r.best.caps)out<<' '<<x;
  out<<' '<<r.best.path.size();for(int x:r.best.path)out<<' '<<x;
  out<<' '<<r.depth<<' '<<r.score<<' '<<r.nodes;
- int offered=threads==6?TrapMaster::offeredPieces(b,side,r.best):0;
+ int offered=threads>=6?TrapMaster::offeredPieces(b,side,r.best):0;
  // A searched sacrifice is a tactical estimate, never a claim of exhaustive proof.
  out<<' '<<(offered?(r.score>0?1:2):0)<<' '<<offered;
+ if(threads==7)out<<' '<<7; // Explicit dispatch marker; existing response fields stay unchanged.
  return out.str();
 }
 #ifndef DAMA_JNI
@@ -288,4 +295,8 @@ int main(){string input((istreambuf_iterator<char>(cin)),istreambuf_iterator<cha
 #else
 #include <jni.h>
 extern "C" JNIEXPORT jstring JNICALL Java_com_maro_dama15_MainActivity_nativeSolve(JNIEnv*env,jobject,jstring str){const char*p=env->GetStringUTFChars(str,nullptr);string result=solve(p);env->ReleaseStringUTFChars(str,p);return env->NewStringUTF(result.c_str());}
+#endif
+
+#else
+} // namespace native_engine
 #endif

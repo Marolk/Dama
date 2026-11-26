@@ -128,6 +128,14 @@ body {
 .seg-btn.active { background: var(--accent); color: var(--accent-text); }
 .seg-btn.devil-btn.active { background: linear-gradient(135deg, #8e0000, #e74c3c); color: #fff; box-shadow: 0 0 12px rgba(231, 76, 60, 0.75); }
 .btn-action { padding: 10px; border-radius: 10px; font-size: 0.88rem; font-weight: 800; cursor: pointer; border: none; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; }
+
+.difficulty-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.difficulty-grid .seg-btn {white-space:normal;min-height:46px;line-height:1.5;}
+.difficulty-grid #diff-6,.difficulty-grid #diff-7 {grid-column:1 / -1;}
+.seg-btn.remontada-btn {background:linear-gradient(120deg,#390a13,#681125);border:2px solid #b94359;color:#ffe5ea;padding:14px 10px;font-size:1rem;font-weight:800;}
+.seg-btn.remontada-btn.active {background:linear-gradient(120deg,#76152c,#a71f38);border-color:#ff9caf;box-shadow:0 0 0 2px #44101a,0 3px 16px #a71f3855;color:#fff;}
+.seg-btn:focus-visible {outline:3px solid #fff;outline-offset:3px;}
+.remontada-note {color:#ffd0d8;border-inline-start:3px solid #c1455c;padding:9px;font-size:.8rem;line-height:1.7;margin:8px 0;}
 </style>
 </head>
 <body>
@@ -242,14 +250,16 @@ body {
 
     <div class="card">
         <div class="section-label" id="ui-diff-label">مستوى القوة الحسابية:</div>
-        <div class="segmented-control five-cols" id="diff-group">
-            <button class="seg-btn" id="diff-1" onclick="setDiff(1)">ساهل</button>
+        <div class="segmented-control difficulty-grid" id="diff-group" role="group" aria-label="Niveau de difficulté">
             <button class="seg-btn" id="diff-2" onclick="setDiff(2)">متوسط</button>
-            <button class="seg-btn" id="diff-3" onclick="setDiff(3)">صعيب</button>
-            <button class="seg-btn" id="diff-4" onclick="setDiff(4)">💀 ديمون</button>
-            <button class="seg-btn devil-btn active" id="diff-5" onclick="setDiff(5)">🔥 إعجازي</button>
+            <button class="seg-btn" id="diff-3" onclick="setDiff(3)">صعب</button>
+            <button class="seg-btn" id="diff-4" onclick="setDiff(4)">ديمون</button>
+            <button class="seg-btn devil-btn active" id="diff-5" onclick="setDiff(5)">إعجازي</button>
+            <button class="seg-btn impossible-btn" id="diff-6" aria-pressed="false" onclick="setDiff(6)">المستحيل — فخاخ وتضحيات</button>
+            <button class="seg-btn remontada-btn" id="diff-7" aria-pressed="false" onclick="setDiff(7)">😈 الشيطان الأعظم — REMONTADA</button>
         </div>
 
+        <p id="remontada-note" class="remontada-note" hidden></p>
         <!-- خيار تحديد من يبدأ الطرح -->
         <div class="section-label" id="ui-starter-label">شكون يبدا الطرح اللول:</div>
         <div class="segmented-control">
@@ -445,6 +455,7 @@ function setLang(lang) {
     document.getElementById('start-p1').textContent = t.startP1;
     document.getElementById('start-p2').textContent = t.startP2;
     document.getElementById('ui-btn-edit').textContent = isEditing ? t.editOn : t.editOff;
+    updateDifficultyHint();
     updateStatus();
 }
 
@@ -456,11 +467,26 @@ function setMode(mode) {
 }
 
 function setDiff(d) {
+    if (![2,3,4,5,6,7].includes(d)) return;
     difficultyLevel = d;
-    [1, 2, 3, 4, 5].forEach(v => document.getElementById('diff-' + v).classList.toggle('active', v === d));
-    saveUserGame();
+    [2,3,4,5,6,7].forEach(v => {
+        const btn=document.getElementById('diff-' + v);
+        btn.classList.toggle('active', v === d);btn.setAttribute('aria-pressed',String(v === d));
+    });
+    updateDifficultyHint();saveUserGame();
+}
+function updateDifficultyHint() {
+    updateRemontadaHint();
 }
 
+function updateRemontadaHint() {
+    const fr=currentLang==='fr';
+    const labels=fr ? ['Moyen','Difficile','Démon','Prodigieux','Impossible — pièges et sacrifices','😈 الشيطان الأعظم — REMONTADA'] : ['متوسط','صعب','ديمون','إعجازي','المستحيل — فخاخ وتضحيات','😈 الشيطان الأعظم — REMONTADA'];
+    [2,3,4,5,6,7].forEach((v,i)=>document.getElementById('diff-'+v).textContent=labels[i]);
+    const note=document.getElementById('remontada-note');
+    note.hidden=difficultyLevel!==7;
+    note.textContent=fr ? 'Pièges, prises forcées et promotions. À évaluation égale, préfère une remontée tactique vérifiée. Aucun handicap volontaire ; la profondeur dépend du temps choisi.' : 'فخاخ، أكل إجباري وترقية. إلا كانت الخطط بنفس التقييم، كيختار التضحية المحسوبة والريمونتادا. بلا خسارة متعمدة؛ عمق الحساب حسب الوقت المختار.';
+}
 function toggleColorPanel() {
     isColorOpen = !isColorOpen;
     document.getElementById('color-panel').classList.toggle('active', isColorOpen);
@@ -821,13 +847,14 @@ async function startSavedGame() {
     configureBoardPreset([1,2,3,4].includes(s.preset) ? s.preset : 1);
     currentRotation = [0,90,180,270].includes(s.rotation) ? s.rotation : 0;
     gameMode = ['ai','2p'].includes(s.mode) ? s.mode : 'ai';
-    const maxDiff = document.getElementById('diff-6') ? 6 : 5;
-    difficultyLevel = Number.isInteger(s.difficulty) && s.difficulty >= 1 && s.difficulty <= maxDiff ? s.difficulty : 5;
+    const availableDifficulties = [2,3,4,5,6,7];
+    // Old Easy saves migrate to Medium; no removed button is accessed.
+    difficultyLevel = s.difficulty === 1 ? 2 : (availableDifficulties.includes(s.difficulty) ? s.difficulty : 5);
     currentLang = ['ar','fr'].includes(s.lang) ? s.lang : 'ar';
     startingPlayer = [P1,P2].includes(s.startingPlayer) ? s.startingPlayer : P1;
     isColorOpen = s.colorOpen === true;
     document.getElementById('color-panel').classList.toggle('active', isColorOpen);
-    for (let n = 1; n <= maxDiff; n++) {
+    for (const n of availableDifficulties) {
         const btn = document.getElementById('diff-' + n);
         btn.classList.toggle('active', n === difficultyLevel);
         btn.setAttribute('aria-pressed', String(n === difficultyLevel));

@@ -7,7 +7,7 @@ const server=http.createServer((req,res)=>{let file=path.join(process.cwd(),'dis
   const browser=await type.launch({headless:true});const page=await browser.newPage({viewport:{width:390,height:844},hasTouch:true});let errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(target);await page.waitForFunction(()=>!loadingMoves&&legalMoves.length>0);assert.equal(await page.evaluate(()=>engineFailure),'');
   assert.equal(await page.locator('.square').count(),100);
-  await page.evaluate(()=>setDiff(1));
+  await page.evaluate(()=>setDiff(2));
   let m=await page.evaluate(()=>legalMoves[0]);
   await page.locator('.square').nth(m.fromRow*10+m.fromCol).tap();
   await page.locator('.square').nth(m.toRow*10+m.toCol).tap();
@@ -21,6 +21,7 @@ const server=http.createServer((req,res)=>{let file=path.join(process.cwd(),'dis
   await page.evaluate(()=>{setStartingPlayer(-1);initGame();setStartingPlayer(1);initGame();});await page.waitForFunction(()=>!loadingMoves&&legalMoves.length>0);await page.waitForTimeout(600);assert.equal(await page.evaluate(()=>moveCount),0);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'horizontal overflow');assert.deepEqual(errors,[]);
   console.log(`${name}: WASM Worker, touch move + AI reply, presets, rotate, edit, restart passed`);
+  await require('./difficulty.cjs').runDifficultyTests(browser,target);
   await require('./persistence.cjs').runPersistenceTests(browser,target);
   await require('./persistence.cjs').runPersistentProfileTest(type,target);
   await browser.close();
